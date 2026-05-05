@@ -10,7 +10,6 @@ import numpy as np
 import random
 import math
 import json
-import os
 import hashlib
 import hmac
 import requests
@@ -79,6 +78,7 @@ st.markdown("""
         padding: 5px 10px;
         border-radius: 20px;
         text-align: center;
+        display: inline-block;
     }
     .signal-medium {
         background-color: #ffa500;
@@ -86,6 +86,7 @@ st.markdown("""
         padding: 5px 10px;
         border-radius: 20px;
         text-align: center;
+        display: inline-block;
     }
     .signal-low {
         background-color: #00cc66;
@@ -93,6 +94,7 @@ st.markdown("""
         padding: 5px 10px;
         border-radius: 20px;
         text-align: center;
+        display: inline-block;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -112,76 +114,6 @@ def init_supabase():
     except Exception as e:
         st.error(f"Supabase连接失败: {e}")
         return None
-
-# ==================== getssq 数据获取 ====================
-def fetch_latest_from_getssq():
-    """从getssq获取最新双色球数据"""
-    if not GETSSQ_AVAILABLE:
-        st.warning("getssq未安装，请运行: pip install getssq")
-        return None
-    
-    try:
-        data = getssq.get_ssq()
-        if data and len(data) > 0:
-            return data
-        return None
-    except Exception as e:
-        st.error(f"getssq获取数据失败: {e}")
-        return None
-
-def sync_draws_to_supabase(draws):
-    """同步开奖数据到Supabase"""
-    supabase = init_supabase()
-    if supabase is None:
-        return False
-    
-    try:
-        # 获取现有期号，避免重复
-        existing = supabase.schema('ssq_schema').table('ssq_draws').select("period").execute()
-        existing_periods = set([str(row['period']) for row in existing.data]) if existing.data else set()
-        
-        new_count = 0
-        for draw in draws:
-            period = str(draw.get('id', draw.get('period', '')))
-            if period in existing_periods:
-                continue
-            
-            # 解析日期
-            date_str = draw.get('date', '')
-            if isinstance(date_str, datetime):
-                date_str = date_str.strftime('%Y-%m-%d')
-            
-            data = {
-                "period": period,
-                "date": date_str,
-                "red1": draw['red'][0] if isinstance(draw['red'], list) else draw.get('red1'),
-                "red2": draw['red'][1] if isinstance(draw['red'], list) else draw.get('red2'),
-                "red3": draw['red'][2] if isinstance(draw['red'], list) else draw.get('red3'),
-                "red4": draw['red'][3] if isinstance(draw['red'], list) else draw.get('red4'),
-                "red5": draw['red'][4] if isinstance(draw['red'], list) else draw.get('red5'),
-                "red6": draw['red'][5] if isinstance(draw['red'], list) else draw.get('red6'),
-                "blue": draw.get('blue', draw.get('special')),
-                "pool_amount": draw.get('poolAmount', draw.get('pool_amount', 0)),
-                "total_sales": draw.get('totalBet', draw.get('total_sales', 0)),
-                "prize1_count": draw.get('prize1Count', draw.get('first_prize_count', 0)),
-                "prize1_amount": draw.get('prize1Amount', draw.get('first_prize_amount', 0)),
-                "prize2_count": draw.get('prize2Count', draw.get('second_prize_count', 0)),
-                "prize2_amount": draw.get('prize2Amount', draw.get('second_prize_amount', 0))
-            }
-            
-            # 插入数据
-            supabase.schema('ssq_schema').table('ssq_draws').insert(data).execute()
-            new_count += 1
-        
-        if new_count > 0:
-            st.success(f"✅ 成功同步 {new_count} 期新数据")
-        else:
-            st.info("📭 没有新数据需要同步")
-        return True
-        
-    except Exception as e:
-        st.error(f"同步到Supabase失败: {e}")
-        return False
 
 def load_draws_from_supabase():
     """从Supabase加载开奖数据"""
@@ -213,14 +145,97 @@ def load_draws_from_supabase():
         st.error(f"从Supabase加载数据失败: {e}")
         return None
 
+def sync_draws_to_supabase(draws):
+    """同步开奖数据到Supabase"""
+    supabase = init_supabase()
+    if supabase is None:
+        return False
+    
+    try:
+        # 获取现有期号，避免重复
+        existing = supabase.schema('ssq_schema').table('ssq_draws').select("period").execute()
+        existing_periods = set([str(row['period']) for row in existing.data]) if existing.data else set()
+        
+        new_count = 0
+        for draw in draws:
+            period = str(draw.get('id', draw.get('period', '')))
+            if period in existing_periods:
+                continue
+            
+            # 处理日期
+            date_val = draw.get('date')
+            if isinstance(date_val, datetime):
+                date_val = date_val.strftime('%Y-%m-%d')
+            
+            # 处理红球
+            reds = draw.get('red', [])
+            if len(reds) >= 6:
+                red1, red2, red3, red4, red5, red6 = reds[0], reds[1], reds[2], reds[3], reds[4], reds[5]
+            else:
+                red1 = draw.get('red1', draw.get('r1', 0))
+                red2 = draw.get('red2', draw.get('r2', 0))
+                red3 = draw.get('red3', draw.get('r3', 0))
+                red4 = draw.get('red4', draw.get('r4', 0))
+                red5 = draw.get('red5', draw.get('r5', 0))
+                red6 = draw.get('red6', draw.get('r6', 0))
+            
+            blue = draw.get('blue', draw.get('special', 0))
+            
+            data = {
+                "period": period,
+                "date": date_val,
+                "red1": red1,
+                "red2": red2,
+                "red3": red3,
+                "red4": red4,
+                "red5": red5,
+                "red6": red6,
+                "blue": blue,
+                "pool_amount": draw.get('poolAmount', draw.get('pool_amount', 0)),
+                "total_sales": draw.get('totalBet', draw.get('total_sales', 0)),
+                "prize1_count": draw.get('prize1Count', draw.get('prize1_count', 0)),
+                "prize1_amount": draw.get('prize1Amount', draw.get('prize1_amount', 0)),
+                "prize2_count": draw.get('prize2Count', draw.get('prize2_count', 0)),
+                "prize2_amount": draw.get('prize2Amount', draw.get('prize2_amount', 0))
+            }
+            
+            supabase.schema('ssq_schema').table('ssq_draws').insert(data).execute()
+            new_count += 1
+        
+        if new_count > 0:
+            st.success(f"✅ 成功同步 {new_count} 期新数据")
+        else:
+            st.info("📭 没有新数据需要同步")
+        return True
+        
+    except Exception as e:
+        st.error(f"同步到Supabase失败: {e}")
+        return False
+
+# ==================== getssq 数据获取 ====================
+def fetch_latest_from_getssq():
+    """从getssq获取最新双色球数据"""
+    if not GETSSQ_AVAILABLE:
+        st.warning("getssq未安装，请运行: pip install getssq")
+        return None
+    
+    try:
+        data = getssq.get_ssq()
+        if data and len(data) > 0:
+            return data
+        return None
+    except Exception as e:
+        st.error(f"getssq获取数据失败: {e}")
+        return None
+
 # ==================== DeepSeek AI 建议 ====================
 def get_deepseek_suggestion(jackpot, sales, weekday, ml_signals):
     """获取DeepSeek AI的投注建议"""
-    if not DEEPSEEK_API_KEY:
+    if not DEEPSEEK_API_KEY or DEEPSEEK_API_KEY == "sk-7136425b4866479fa6ed9181bf2c1b7c":
         return fallback_suggestion(ml_signals)
     
     try:
-        prompt = f"""你是双色球AI分析专家。基于以下数据，给出投注建议（50字以内）：
+        prompt = f"""你是双色球AI分析专家。基于以下数据，给出投注建议：
 
 【市场数据】
 - 奖池金额：{jackpot/1e8:.1f}亿元 ({jackpot:,.0f}元)
@@ -233,8 +248,8 @@ def get_deepseek_suggestion(jackpot, sales, weekday, ml_signals):
 - 头奖周期：{ml_signals.get('cycle', '正常')}
 - 蓝球偏向：{ml_signals.get('blue_bias', '均衡')}
 
-请输出JSON格式：
-{{"plan": "推荐方案(7+1/7+2/观望)", "win_rate": "预期赢率%", "blue_advice": "蓝球建议", "summary": "一句话总结"}}
+请按以下JSON格式回复（不要有其他内容）：
+{{"plan": "推荐方案", "win_rate": "预期赢率%", "blue_advice": "蓝球建议", "summary": "一句话总结"}}
 """
         
         response = requests.post(
@@ -254,7 +269,6 @@ def get_deepseek_suggestion(jackpot, sales, weekday, ml_signals):
         
         if response.status_code == 200:
             content = response.json()['choices'][0]['message']['content']
-            # 尝试解析JSON
             import re
             json_match = re.search(r'\{[^{}]*\}', content)
             if json_match:
@@ -274,15 +288,6 @@ def fallback_suggestion(ml_signals):
     }
 
 # ==================== 双色球专用函数 ====================
-def get_red_zone(num):
-    """获取红球分区（三区）"""
-    if num <= 11:
-        return 1
-    elif num <= 22:
-        return 2
-    else:
-        return 3
-
 def calculate_red_scores(draws, window_total=100, window_short=20, window_recent=10):
     """计算红球评分"""
     if len(draws) < window_total:
@@ -354,7 +359,6 @@ def calculate_blue_scores(draws, window_total=50):
         if special:
             freq[special] += 1
     
-    # 遗漏期数
     last_seen = {i: None for i in range(1, 17)}
     for idx, draw in enumerate(reversed(draws)):
         special = draw.get('special')
@@ -364,7 +368,6 @@ def calculate_blue_scores(draws, window_total=50):
     total_draws = len(draws)
     absence = {i: last_seen[i] if last_seen[i] is not None else total_draws for i in range(1, 17)}
     
-    # 归一化评分
     max_freq = max(freq.values()) if freq.values() else 1
     max_absence = max(absence.values()) if absence.values() else 1
     
@@ -376,30 +379,36 @@ def calculate_blue_scores(draws, window_total=50):
     
     return scores
 
-def calculate_enhanced_scores(draws, window_total=100):
-    """计算增强评分（包含上期重复加分）"""
-    red_scores, _, _, _ = calculate_red_scores(draws, window_total=window_total)
+def get_sampling_weights(scores, temperature=1.5):
+    """获取采样权重"""
+    weights = {}
+    for num, score in scores.items():
+        weights[num] = math.exp(score / temperature)
+    return weights
+
+def weighted_random_sample(weights, k=6, max_attempts=100):
+    """加权随机采样"""
+    numbers = list(weights.keys())
+    weight_list = [weights[n] for n in numbers]
     
-    if len(draws) == 0:
-        return red_scores, {}, []
+    for _ in range(max_attempts):
+        selected = random.choices(population=numbers, weights=weight_list, k=k)
+        if len(set(selected)) == k:
+            return sorted(selected)
     
-    last_draw = draws[-1]
-    last_numbers = last_draw['numbers']
+    return sorted(random.sample(numbers, k))
+
+def generate_one_combination(weights, num_count, target_sum, tolerance):
+    """生成一组组合"""
+    max_attempts = 5000
+    for _ in range(max_attempts):
+        selected = weighted_random_sample(weights, k=num_count)
+        total = sum(selected)
+        if abs(total - target_sum) <= tolerance:
+            return selected, total
     
-    enhanced_scores = {}
-    for num in range(1, 34):
-        boost = 0.0
-        if num in last_numbers:
-            boost += 2.0
-        
-        if len(draws) >= 2:
-            prev_draw = draws[-2]
-            if num in prev_draw['numbers'] and num not in last_numbers:
-                boost += 1.0
-        
-        enhanced_scores[num] = red_scores[num] + boost
-    
-    return enhanced_scores, {}, []
+    selected = weighted_random_sample(weights, k=num_count)
+    return selected, sum(selected)
 
 def get_dynamic_sum_range(draws, num_count=6, window=4):
     """动态和值预测"""
@@ -434,45 +443,8 @@ def get_dynamic_sum_range(draws, num_count=6, window=4):
     
     return int(target), tolerance, direction, direction_desc, long_term_mean, long_term_std, short_mean
 
-def get_sampling_weights(scores, temperature=1.5):
-    """获取采样权重"""
-    weights = {}
-    for num, score in scores.items():
-        weights[num] = math.exp(score / temperature)
-    return weights
-
-def weighted_random_sample(weights, k=6, max_attempts=100):
-    """加权随机采样"""
-    numbers = list(weights.keys())
-    weight_list = [weights[n] for n in numbers]
-    
-    for _ in range(max_attempts):
-        selected = random.choices(population=numbers, weights=weight_list, k=k)
-        if len(set(selected)) == k:
-            return sorted(selected)
-    
-    return sorted(random.sample(numbers, k))
-
-def generate_one_combination(weights, num_count, target_sum, tolerance, last_numbers):
-    """生成一组组合"""
-    max_attempts = 5000
-    for _ in range(max_attempts):
-        selected = weighted_random_sample(weights, k=num_count)
-        total = sum(selected)
-        if abs(total - target_sum) <= tolerance:
-            return selected, total
-    
-    selected = weighted_random_sample(weights, k=num_count)
-    return selected, sum(selected)
-
-def generate_blue_combination(blue_scores, num_blue=1):
-    """生成蓝球组合"""
-    weights = get_sampling_weights(blue_scores, temperature=1.0)
-    blues = weighted_random_sample(weights, k=num_blue, max_attempts=50)
-    return sorted(blues)
-
 # ==================== 投注生成函数 ====================
-def generate_bets_method1(draws, num_bets, num_red=6, num_blue=1, trend_window=4):
+def generate_bets_method1(draws, num_bets, num_red=6, num_blue=1):
     """方法1：冷热码+和值"""
     if len(draws) < 10:
         return []
@@ -483,124 +455,38 @@ def generate_bets_method1(draws, num_bets, num_red=6, num_blue=1, trend_window=4
     weights_red = get_sampling_weights(red_scores, temperature=1.5)
     weights_blue = get_sampling_weights(blue_scores, temperature=1.0)
     
-    target_sum, tolerance, _, _, _, _, _ = get_dynamic_sum_range(draws, num_red, trend_window)
-    last_numbers = draws[-1]['numbers'] if draws else []
+    target_sum, tolerance, _, _, _, _, _ = get_dynamic_sum_range(draws, num_red)
     
     bets = []
     for i in range(num_bets):
-        reds, total = generate_one_combination(weights_red, num_red, target_sum, tolerance, last_numbers)
-        blues = generate_blue_combination(blue_scores, num_blue)
+        # 生成红球
+        reds, total = generate_one_combination(weights_red, num_red, target_sum, tolerance)
+        # 生成蓝球
+        blues = weighted_random_sample(weights_blue, k=num_blue)
         bets.append({
-            'reds': reds,
-            'blues': blues,
+            'reds': sorted(reds),
+            'blues': sorted(blues),
             'sum': total,
             'method': '当前方法'
         })
     
     return bets
 
-def generate_bets_method2(draws, num_bets, num_red=6, num_blue=1, trend_window=4):
+def generate_bets_method2(draws, num_bets, num_red=6, num_blue=1):
     """方法2：胆拖混合"""
-    # 简化版：使用方法1的增强版本
-    return generate_bets_method1(draws, num_bets, num_red, num_blue, trend_window)
+    return generate_bets_method1(draws, num_bets, num_red, num_blue)
 
-def generate_bets_method3(draws, num_bets, num_red=6, num_blue=1, trend_window=4):
+def generate_bets_method3(draws, num_bets, num_red=6, num_blue=1):
     """方法3：LightGBM"""
     if not LGB_AVAILABLE:
-        return generate_bets_method1(draws, num_bets, num_red, num_blue, trend_window)
-    # 简化版：降级到方法1
-    return generate_bets_method1(draws, num_bets, num_red, num_blue, trend_window)
+        return generate_bets_method1(draws, num_bets, num_red, num_blue)
+    return generate_bets_method1(draws, num_bets, num_red, num_blue)
 
-def generate_bets_method4(draws, num_bets, num_red=6, num_blue=1, trend_window=4):
+def generate_bets_method4(draws, num_bets, num_red=6, num_blue=1):
     """方法4：XGBoost+NN集成"""
     if not XGB_AVAILABLE:
-        return generate_bets_method1(draws, num_bets, num_red, num_blue, trend_window)
-    # 简化版：降级到方法1
-    return generate_bets_method1(draws, num_bets, num_red, num_blue, trend_window)
-
-# ==================== 管理员函数 ====================
-def check_password(password):
-    return hmac.compare_digest(password, "Ku_product$2026")
-
-def admin_login():
-    with st.form("admin_login_form"):
-        username = st.text_input("用户名", key="admin_username")
-        password = st.text_input("密码", type="password", key="admin_password")
-        submitted = st.form_submit_button("登录")
-        if submitted:
-            if username == "Laurence_ku" and check_password(password):
-                st.session_state['admin_logged_in'] = True
-                st.session_state['show_admin'] = False
-                st.success("登录成功！")
-                st.rerun()
-            else:
-                st.error("用户名或密码错误")
-
-def admin_logout():
-    if st.button("退出登录", key="logout_btn"):
-        st.session_state['admin_logged_in'] = False
-        st.session_state['show_admin'] = False
-        st.rerun()
-
-def show_admin_page():
-    """管理员页面"""
-    with st.expander("🔧 管理员控制台", expanded=True):
-        st.subheader("📡 数据同步")
-        
-        # 显示当前数据状态
-        current_draws = load_draws_from_supabase()
-        if current_draws:
-            st.success(f"✅ 当前云端有 {len(current_draws)} 期数据")
-            if len(current_draws) > 0:
-                st.info(f"📊 数据范围: {current_draws[0].get('period')} 到 {current_draws[-1].get('period')}")
-        else:
-            st.info("📭 云端暂无数据")
-        
-        st.markdown("---")
-        
-        # getssq同步按钮
-        st.subheader("🔄 从getssq同步最新数据")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("📥 获取并同步最新数据", type="primary", key="sync_getssq"):
-                with st.spinner("正在从getssq获取数据..."):
-                    if GETSSQ_AVAILABLE:
-                        data = fetch_latest_from_getssq()
-                        if data:
-                            st.success(f"获取到 {len(data)} 期数据")
-                            if sync_draws_to_supabase(data):
-                                st.balloons()
-                                st.rerun()
-                    else:
-                        st.error("getssq未安装，请运行: pip install getssq")
-        
-        with col2:
-            st.caption("getssq会自动获取最新双色球开奖数据")
-        
-        st.markdown("---")
-        
-        # 数据管理
-        st.subheader("📁 数据管理")
-        
-        if current_draws:
-            # 显示最新10期数据预览
-            st.markdown("**最新10期数据预览**")
-            preview_df = pd.DataFrame(current_draws[-10:])
-            preview_cols = ['period', 'date', 'numbers', 'special', 'pool_amount', 'total_sales']
-            preview_df = preview_df[[c for c in preview_cols if c in preview_df.columns]]
-            st.dataframe(preview_df, use_container_width=True, hide_index=True)
-            
-            # 删除数据按钮
-            if st.button("🗑️ 清空所有数据", type="secondary"):
-                supabase = init_supabase()
-                if supabase:
-                    try:
-                        supabase.schema('ssq_schema').table('ssq_draws').delete().neq("id", 0).execute()
-                        st.success("数据已清空")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"清空失败: {e}")
+        return generate_bets_method1(draws, num_bets, num_red, num_blue)
+    return generate_bets_method1(draws, num_bets, num_red, num_blue)
 
 # ==================== ML信号计算 ====================
 def calculate_ml_signals(draws):
@@ -610,7 +496,9 @@ def calculate_ml_signals(draws):
             'jackpot_level': '数据不足',
             'scissors': '数据不足',
             'cycle': '数据不足',
-            'blue_bias': '均衡'
+            'blue_bias': '均衡',
+            'pool': 0,
+            'sales': 0
         }
     
     latest = draws[-1]
@@ -632,8 +520,8 @@ def calculate_ml_signals(draws):
         prev_sales = prev.get('total_sales', 0)
         
         if prev_pool > 0 and prev_sales > 0:
-            pool_change = (pool - prev_pool) / prev_pool
-            sales_change = (sales - prev_sales) / prev_sales
+            pool_change = (pool - prev_pool) / prev_pool if prev_pool > 0 else 0
+            sales_change = (sales - prev_sales) / prev_sales if prev_sales > 0 else 0
             
             if sales_change > 0.05 and pool_change < -0.03:
                 scissors = "HIGH_ALERT (头奖爆发预警)"
@@ -678,6 +566,85 @@ def calculate_ml_signals(draws):
         'sales': sales
     }
 
+# ==================== 管理员函数 ====================
+def check_password(password):
+    return hmac.compare_digest(password, "Ku_product$2026")
+
+def admin_login():
+    with st.form("admin_login_form"):
+        username = st.text_input("用户名", key="admin_username")
+        password = st.text_input("密码", type="password", key="admin_password")
+        submitted = st.form_submit_button("登录")
+        if submitted:
+            if username == "Laurence_ku" and check_password(password):
+                st.session_state['admin_logged_in'] = True
+                st.session_state['show_admin'] = False
+                st.success("登录成功！")
+                st.rerun()
+            else:
+                st.error("用户名或密码错误")
+
+def admin_logout():
+    if st.button("退出登录", key="logout_btn"):
+        st.session_state['admin_logged_in'] = False
+        st.session_state['show_admin'] = False
+        st.rerun()
+
+def show_admin_page():
+    """管理员页面"""
+    with st.expander("🔧 管理员控制台", expanded=True):
+        st.subheader("📡 数据同步")
+        
+        current_draws = load_draws_from_supabase()
+        if current_draws:
+            st.success(f"✅ 当前云端有 {len(current_draws)} 期数据")
+            if len(current_draws) > 0:
+                st.info(f"📊 数据范围: {current_draws[0].get('period')} 到 {current_draws[-1].get('period')}")
+        else:
+            st.info("📭 云端暂无数据")
+        
+        st.markdown("---")
+        
+        st.subheader("🔄 从getssq同步最新数据")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("📥 获取并同步最新数据", type="primary", key="sync_getssq"):
+                with st.spinner("正在从getssq获取数据..."):
+                    if GETSSQ_AVAILABLE:
+                        data = fetch_latest_from_getssq()
+                        if data:
+                            st.success(f"获取到 {len(data)} 期数据")
+                            if sync_draws_to_supabase(data):
+                                st.balloons()
+                                st.rerun()
+                    else:
+                        st.error("getssq未安装，请运行: pip install getssq")
+        
+        with col2:
+            st.caption("getssq会自动获取最新双色球开奖数据")
+        
+        st.markdown("---")
+        
+        st.subheader("📁 数据管理")
+        
+        if current_draws:
+            st.markdown("**最新10期数据预览**")
+            preview_df = pd.DataFrame(current_draws[-10:])
+            preview_cols = ['period', 'date', 'numbers', 'special', 'pool_amount', 'total_sales']
+            preview_df = preview_df[[c for c in preview_cols if c in preview_df.columns]]
+            st.dataframe(preview_df, use_container_width=True, hide_index=True)
+            
+            if st.button("🗑️ 清空所有数据", type="secondary"):
+                supabase = init_supabase()
+                if supabase:
+                    try:
+                        supabase.schema('ssq_schema').table('ssq_draws').delete().neq("id", 0).execute()
+                        st.success("数据已清空")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"清空失败: {e}")
+
 # ==================== 查奖函数 ====================
 def parse_check_draws(text):
     """解析查奖数据"""
@@ -685,12 +652,12 @@ def parse_check_draws(text):
     draws = []
     for line in lines[:5]:
         parts = line.replace(',', ' ').split()
-        if len(parts) >= 8:
+        if len(parts) >= 9:
             try:
                 draws.append({
                     'period': parts[0],
                     'reds': [int(parts[i]) for i in range(2, 8)],
-                    'blue': int(parts[8]) if len(parts) > 8 else None
+                    'blue': int(parts[8])
                 })
             except:
                 continue
@@ -699,7 +666,7 @@ def parse_check_draws(text):
 def calculate_prize_for_bet(bet, draw):
     """计算单组投注的中奖情况"""
     red_matches = len(set(bet['reds'][:6]) & set(draw['reds']))
-    blue_match = (bet['blues'][0] == draw['blue']) if bet['blues'] and draw['blue'] else False
+    blue_match = (bet['blues'][0] == draw['blue']) if bet['blues'] else False
     
     if red_matches == 6 and blue_match:
         return "一等奖 (浮动)"
@@ -749,7 +716,6 @@ with st.sidebar:
     st.title("🎰 双色球AI分析工具")
     st.markdown("---")
     
-    # ML库状态
     with st.expander("🤖 ML库状态", expanded=True):
         col1, col2 = st.columns(2)
         with col1:
@@ -771,7 +737,6 @@ with st.sidebar:
             else:
                 st.error("❌ sklearn")
     
-    # 四种算法对比
     with st.expander("📖 四种AI算法对比"):
         st.markdown("""
         | 算法 | 特点 | 预期ROI |
@@ -782,7 +747,6 @@ with st.sidebar:
         | 🟣 方法4:XGBoost+NN | 集成深度学习 | **+203%** |
         """)
     
-    # 奖金结构
     with st.expander("💰 奖金结构（7+1复式）"):
         st.markdown("""
         | 条件 | 单注奖金 | 7+1总奖金 |
@@ -821,13 +785,17 @@ with col_title:
     st.title("🎯 双色球AI智能选号")
 with col_pool:
     pool = ml_signals.get('pool', 0)
-    st.metric("🏦 实时奖池", f"¥{pool/1e8:.1f}亿", 
-              delta=f"+{(pool - draws[-2].get('pool_amount', 0))/1e6:.0f}万" if len(draws) > 1 else None)
+    delta_text = ""
+    if len(draws) > 1:
+        prev_pool = draws[-2].get('pool_amount', 0)
+        delta = (pool - prev_pool) / 1e6
+        delta_text = f"+{delta:.0f}万" if delta >= 0 else f"{delta:.0f}万"
+    st.metric("🏦 实时奖池", f"¥{pool/1e8:.1f}亿", delta=delta_text if delta_text else None)
 with col_signal:
     signal_level = ml_signals.get('scissors', 'NORMAL')
-    if signal_level == "HIGH_ALERT":
+    if "HIGH" in signal_level:
         st.markdown('<div class="signal-high">🔔 强烈推荐投注</div>', unsafe_allow_html=True)
-    elif signal_level == "MEDIUM":
+    elif "MEDIUM" in signal_level:
         st.markdown('<div class="signal-medium">⚠️ 谨慎投注</div>', unsafe_allow_html=True)
     else:
         st.markdown('<div class="signal-low">💤 建议观望</div>', unsafe_allow_html=True)
@@ -841,7 +809,8 @@ col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.metric("奖池阈值", ml_signals.get('jackpot_level', 'N/A'))
 with col2:
-    st.metric("剪刀差信号", ml_signals.get('scissors', 'N/A').split()[0])
+    scissor_text = ml_signals.get('scissors', 'NORMAL').split()[0] if ml_signals.get('scissors') else 'NORMAL'
+    st.metric("剪刀差信号", scissor_text)
 with col3:
     st.metric("头奖周期", ml_signals.get('cycle', 'N/A'))
 with col4:
@@ -852,7 +821,6 @@ st.markdown("---")
 # ==================== AI投注建议区域 ====================
 st.subheader("💡 智能投注建议")
 
-# 获取DeepSeek建议
 ai_suggestion = get_deepseek_suggestion(
     ml_signals.get('pool', 0),
     ml_signals.get('sales', 0),
@@ -895,11 +863,11 @@ with col3:
 
 # 解析复式类型
 if bet_type == "7+1 (14元)":
-    num_red, num_blue = 7, 1
+    num_red, num_blue = 6, 1
 elif bet_type == "7+2 (28元)":
-    num_red, num_blue = 7, 2
+    num_red, num_blue = 6, 2
 else:
-    num_red, num_blue = 8, 1
+    num_red, num_blue = 6, 1
 
 if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
     with st.spinner(f"正在使用 {ai_model} 生成投注..."):
@@ -926,11 +894,11 @@ if st.session_state['generated_bets'] is not None:
     model_used = st.session_state.get('model_used', '未知模型')
     
     st.markdown(f"### 📝 推荐投注组合 - {model_used}")
-    st.caption(f"{bet_type}复式，每组成本{bet_type.split('(')[1]}")
+    st.caption(f"{bet_type}复式，每组成本{bet_type.split('(')[1] if '(' in bet_type else '14元'}")
     
     bets_data = []
     for i, bet in enumerate(bets, 1):
-        reds_display = ' '.join(f"{n:02d}" for n in bet['reds'][:6])
+        reds_display = ' '.join(f"{n:02d}" for n in bet['reds'])
         blues_display = ' '.join(f"{n:02d}" for n in bet['blues'])
         bets_data.append({
             '组别': i,
@@ -941,14 +909,7 @@ if st.session_state['generated_bets'] is not None:
     
     st.dataframe(pd.DataFrame(bets_data), use_container_width=True, hide_index=True)
     
-    # DeepSeek对本次投注的解读
-    deepseek_comment = get_deepseek_suggestion(
-        ml_signals.get('pool', 0),
-        ml_signals.get('sales', 0),
-        datetime.now().strftime('%A'),
-        ml_signals
-    )
-    st.info(f"💬 **AI解读**：{deepseek_comment.get('summary', '祝您好运！')}")
+    st.info(f"💬 **AI解读**：{ai_suggestion.get('summary', '祝您好运！')}")
 
 st.markdown("---")
 
@@ -971,7 +932,7 @@ if st.button("🔍 查奖", key="check_btn") and check_draws_text:
         if st.session_state.get('generated_bets'):
             enhanced_data = []
             for i, bet in enumerate(st.session_state['generated_bets'], 1):
-                row = {'组别': i, '红球': ','.join(f"{n:02d}" for n in bet['reds'][:6]), '蓝球': ','.join(f"{n:02d}" for n in bet['blues'])}
+                row = {'组别': i, '红球': ','.join(f"{n:02d}" for n in bet['reds']), '蓝球': ','.join(f"{n:02d}" for n in bet['blues'])}
                 for draw in check_draws:
                     result = calculate_prize_for_bet(bet, draw)
                     row[f'{draw["period"]}'] = result
