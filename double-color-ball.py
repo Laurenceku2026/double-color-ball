@@ -1,33 +1,27 @@
 # app.py
-# 双色球AI智能选号工具 - Streamlit Cloud完整版
-# 支持四种AI模型：当前方法、胆拖混合、LightGBM、XGBoost+神经网络集成
-# 数据存储：Supabase 云端数据库
-# 实时数据：getssq npm包
+# 双色球AI智能选号工具 - 完整版
+# 功能：四种AI算法、MCP+爬虫双数据源、Supabase存储、DeepSeek集成、管理员功能
+# 版本：v4.0
+# Python版本：3.11
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import random
 import math
-import json
 import hashlib
 import hmac
 import requests
+import json
+import re
 from datetime import datetime, timedelta
+from typing import List, Dict, Tuple, Optional, Any
 import plotly.express as px
 import plotly.graph_objects as go
-
-# Supabase
 from supabase import create_client, Client
+from retryflow import retry
 
-# 尝试导入getssq
-try:
-    import getssq
-    GETSSQ_AVAILABLE = True
-except ImportError:
-    GETSSQ_AVAILABLE = False
-
-# 尝试导入机器学习库
+# ==================== 尝试导入ML库 ====================
 try:
     import lightgbm as lgb
     LGB_AVAILABLE = True
@@ -43,18 +37,27 @@ except ImportError:
 try:
     from sklearn.neural_network import MLPClassifier
     from sklearn.preprocessing import StandardScaler
+    from sklearn.ensemble import RandomForestClassifier
     SKLEARN_AVAILABLE = True
 except ImportError:
     SKLEARN_AVAILABLE = False
 
-# 页面配置
+# 尝试导入MCP（F0ckssq-mcp）
+try:
+    from ssq_mcp import get_recent_data, get_data_by_issue_range, get_frequency_analysis
+    MCP_AVAILABLE = True
+except ImportError:
+    MCP_AVAILABLE = False
+
+# ==================== 页面配置 ====================
 st.set_page_config(
-    page_title="双色球AI分析工具 - 云端ML完整版",
+    page_title="双色球AI分析工具 - 完整版",
     page_icon="🎰",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# 自定义CSS
+# ==================== 自定义CSS ====================
 st.markdown("""
 <style>
     .stDataFrame { text-align: center; }
@@ -62,45 +65,68 @@ st.markdown("""
     .stDataFrame th { text-align: center !important; }
     .stDataFrame td { text-align: center !important; }
     .stMetric { text-align: center; }
-    .stNumberInput input { text-align: center; }
-    .stCheckbox { margin-top: 10px; }
-    .stAlert { font-size: 0.9rem; }
-    div[data-testid="stExpander"] div[role="button"] p { font-size: 1.1rem; font-weight: bold; }
     .ai-suggestion-box {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         border-radius: 10px;
         padding: 20px;
         color: white;
+        margin: 10px 0;
     }
-    .signal-high {
-        background-color: #ff4b4b;
-        color: white;
+    .data-source-status {
+        font-size: 0.8rem;
         padding: 5px 10px;
-        border-radius: 20px;
-        text-align: center;
-        display: inline-block;
+        border-radius: 15px;
+        margin: 2px 0;
     }
-    .signal-medium {
-        background-color: #ffa500;
-        color: white;
-        padding: 5px 10px;
-        border-radius: 20px;
+    .status-success { background-color: #28a745; color: white; }
+    .status-error { background-color: #dc3545; color: white; }
+    .status-warning { background-color: #ffc107; color: #333; }
+    .signal-high { background-color: #ff4b4b; color: white; padding: 5px 10px; border-radius: 20px; display: inline-block; }
+    .signal-medium { background-color: #ffa500; color: white; padding: 5px 10px; border-radius: 20px; display: inline-block; }
+    .signal-low { background-color: #00cc66; color: white; padding: 5px 10px; border-radius: 20px; display: inline-block; }
+    .bet-card {
+        background-color: #f0f2f6;
+        border-radius: 10px;
+        padding: 15px;
+        margin: 5px;
         text-align: center;
-        display: inline-block;
     }
-    .signal-low {
-        background-color: #00cc66;
-        color: white;
-        padding: 5px 10px;
-        border-radius: 20px;
-        text-align: center;
+    .red-ball {
         display: inline-block;
+        width: 36px;
+        height: 36px;
+        line-height: 36px;
+        text-align: center;
+        background: linear-gradient(135deg, #ff6b6b, #ee5a5a);
+        color: white;
+        border-radius: 50%;
+        margin: 2px;
+        font-weight: bold;
+    }
+    .blue-ball {
+        display: inline-block;
+        width: 36px;
+        height: 36px;
+        line-height: 36px;
+        text-align: center;
+        background: linear-gradient(135deg, #4facfe, #00f2fe);
+        color: white;
+        border-radius: 50%;
+        margin: 2px;
+        font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
 
+# ==================== 常量定义 ====================
+RED_NUMBERS = list(range(1, 34))
+BLUE_NUMBERS = list(range(1, 17))
+RED_EXPECTED_SUM = 102  # (1+33)/2 * 6
+RED_SUM_STD = 15
+BLUE_EXPECTED = 8.5
+
 # ==================== DeepSeek 配置 ====================
-DEEPSEEK_API_KEY = st.secrets.get("DEEPSEEK_API_KEY", "sk-7136425b4866479fa6ed9181bf2c1b7c")
+DEEPSEEK_API_KEY = st.secrets.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = st.secrets.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_MODEL = st.secrets.get("DEEPSEEK_MODEL", "deepseek-chat")
 
@@ -115,381 +141,866 @@ def init_supabase():
         st.error(f"Supabase连接失败: {e}")
         return None
 
-def load_draws_from_supabase():
-    """从Supabase加载开奖数据"""
-    supabase = init_supabase()
-    if supabase is None:
+# ==================== 数据源1：MCP服务 ====================
+@retry(max_attempts=2, delay=1.0, backoff=2.0)
+def fetch_from_mcp(limit: int = 200) -> Optional[List[Dict]]:
+    """从MCP服务获取双色球数据"""
+    if not MCP_AVAILABLE:
         return None
     
     try:
-        response = supabase.schema('ssq_schema').table('ssq_draws').select("*").order("period", desc=False).execute()
-        draws = []
-        for row in response.data:
-            draws.append({
-                'period': row.get('period'),
-                'date': row.get('date'),
-                'numbers': [row.get('red1'), row.get('red2'), row.get('red3'), 
-                           row.get('red4'), row.get('red5'), row.get('red6')],
-                'special': row.get('blue'),
-                'sum': sum([row.get('red1'), row.get('red2'), row.get('red3'),
-                           row.get('red4'), row.get('red5'), row.get('red6')]),
-                'pool_amount': row.get('pool_amount', 0),
-                'total_sales': row.get('total_sales', 0),
-                'prize1_count': row.get('prize1_count', 0),
-                'prize1_amount': row.get('prize1_amount', 0),
-                'prize2_count': row.get('prize2_count', 0),
-                'prize2_amount': row.get('prize2_amount', 0)
-            })
-        return draws
-    except Exception as e:
-        st.error(f"从Supabase加载数据失败: {e}")
-        return None
-
-def sync_draws_to_supabase(draws):
-    """同步开奖数据到Supabase"""
-    supabase = init_supabase()
-    if supabase is None:
-        return False
-    
-    try:
-        # 获取现有期号，避免重复
-        existing = supabase.schema('ssq_schema').table('ssq_draws').select("period").execute()
-        existing_periods = set([str(row['period']) for row in existing.data]) if existing.data else set()
-        
-        new_count = 0
-        for draw in draws:
-            period = str(draw.get('id', draw.get('period', '')))
-            if period in existing_periods:
-                continue
-            
-            # 处理日期
-            date_val = draw.get('date')
-            if isinstance(date_val, datetime):
-                date_val = date_val.strftime('%Y-%m-%d')
-            
-            # 处理红球
-            reds = draw.get('red', [])
-            if len(reds) >= 6:
-                red1, red2, red3, red4, red5, red6 = reds[0], reds[1], reds[2], reds[3], reds[4], reds[5]
-            else:
-                red1 = draw.get('red1', draw.get('r1', 0))
-                red2 = draw.get('red2', draw.get('r2', 0))
-                red3 = draw.get('red3', draw.get('r3', 0))
-                red4 = draw.get('red4', draw.get('r4', 0))
-                red5 = draw.get('red5', draw.get('r5', 0))
-                red6 = draw.get('red6', draw.get('r6', 0))
-            
-            blue = draw.get('blue', draw.get('special', 0))
-            
-            data = {
-                "period": period,
-                "date": date_val,
-                "red1": red1,
-                "red2": red2,
-                "red3": red3,
-                "red4": red4,
-                "red5": red5,
-                "red6": red6,
-                "blue": blue,
-                "pool_amount": draw.get('poolAmount', draw.get('pool_amount', 0)),
-                "total_sales": draw.get('totalBet', draw.get('total_sales', 0)),
-                "prize1_count": draw.get('prize1Count', draw.get('prize1_count', 0)),
-                "prize1_amount": draw.get('prize1Amount', draw.get('prize1_amount', 0)),
-                "prize2_count": draw.get('prize2Count', draw.get('prize2_count', 0)),
-                "prize2_amount": draw.get('prize2Amount', draw.get('prize2_amount', 0))
-            }
-            
-            supabase.schema('ssq_schema').table('ssq_draws').insert(data).execute()
-            new_count += 1
-        
-        if new_count > 0:
-            st.success(f"✅ 成功同步 {new_count} 期新数据")
-        else:
-            st.info("📭 没有新数据需要同步")
-        return True
-        
-    except Exception as e:
-        st.error(f"同步到Supabase失败: {e}")
-        return False
-
-# ==================== getssq 数据获取 ====================
-def fetch_latest_from_getssq():
-    """从getssq获取最新双色球数据"""
-    if not GETSSQ_AVAILABLE:
-        st.warning("getssq未安装，请运行: pip install getssq")
-        return None
-    
-    try:
-        data = getssq.get_ssq()
+        data = get_recent_data(limit=limit)
         if data and len(data) > 0:
-            return data
+            adapted = []
+            for item in data:
+                # 处理红球
+                reds = item.get('reds', item.get('red', []))
+                if isinstance(reds, str):
+                    reds = [int(r) for r in reds.split(',')]
+                
+                adapted.append({
+                    'period': str(item.get('issue', item.get('period', ''))),
+                    'date': item.get('date'),
+                    'reds': reds[:6] if len(reds) >= 6 else [0]*6,
+                    'blue': int(item.get('blue', 0)),
+                    'pool': float(item.get('pool', item.get('pool_amount', 0))),
+                    'sales': float(item.get('sales', item.get('total_sales', 0))),
+                    'prize1_count': int(item.get('prize1_count', item.get('first_prize_count', 0))),
+                    'prize1_amount': float(item.get('prize1_amount', item.get('first_prize_amount', 0))),
+                    'prize2_count': int(item.get('prize2_count', item.get('second_prize_count', 0))),
+                    'prize2_amount': float(item.get('prize2_amount', item.get('second_prize_amount', 0)))
+                })
+            return adapted
         return None
     except Exception as e:
-        st.error(f"getssq获取数据失败: {e}")
+        st.warning(f"MCP获取失败: {e}")
         return None
+
+# ==================== 数据源2：中彩网爬虫 ====================
+@retry(max_attempts=2, delay=1.0, backoff=2.0)
+def fetch_from_zhcw(page: int = 1) -> Optional[List[Dict]]:
+    """从中彩网爬取双色球数据"""
+    try:
+        url = f"http://kaijiang.zhcw.com/zhcw/html/ssq/list_{page}.html"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=15)
+        response.encoding = 'utf-8'
+        
+        if response.status_code != 200:
+            return None
+        
+        # 使用pandas读取HTML表格
+        tables = pd.read_html(response.text)
+        if not tables:
+            return None
+        
+        df = tables[0]
+        draws = []
+        
+        for _, row in df.iterrows():
+            # 提取号码
+            numbers_str = str(row.iloc[2]) if len(row) > 2 else ""
+            # 格式如 "01 14 20 21 23 27 06"
+            parts = numbers_str.strip().split()
+            if len(parts) >= 7:
+                reds = [int(p) for p in parts[:6]]
+                blue = int(parts[6])
+                
+                # 提取销售额
+                sales_str = str(row.iloc[3]) if len(row) > 3 else "0"
+                sales = float(sales_str.replace(',', '')) if sales_str else 0
+                
+                # 提取一等奖注数
+                prize1_str = str(row.iloc[4]) if len(row) > 4 else "0"
+                prize1_count = int(prize1_str) if prize1_str.isdigit() else 0
+                
+                # 提取二等奖注数
+                prize2_str = str(row.iloc[5]) if len(row) > 5 else "0"
+                prize2_count = int(prize2_str) if prize2_str.isdigit() else 0
+                
+                draws.append({
+                    'period': str(row.iloc[1]) if len(row) > 1 else "",
+                    'date': row.iloc[0] if len(row) > 0 else None,
+                    'reds': reds,
+                    'blue': blue,
+                    'sales': sales,
+                    'prize1_count': prize1_count,
+                    'prize2_count': prize2_count,
+                    'pool': 0,  # 中彩网不提供奖池
+                    'prize1_amount': 0,
+                    'prize2_amount': 0
+                })
+        
+        return draws if draws else None
+    except Exception as e:
+        st.warning(f"中彩网爬取失败: {e}")
+        return None
+
+# ==================== 数据源3：中国福彩网爬虫（获取奖池） ====================
+@retry(max_attempts=2, delay=1.0, backoff=2.0)
+def fetch_pool_from_cwl(period: str) -> Optional[float]:
+    """从中国福彩网获取指定期号的奖池金额"""
+    try:
+        url = f"https://www.cwl.gov.cn/kjxx/ssq/period-{period}/"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            return None
+        
+        # 使用正则表达式提取奖池
+        import re
+        pattern = r'奖池奖金[：:]\s*([\d,]+)'
+        match = re.search(pattern, response.text)
+        if match:
+            return float(match.group(1).replace(',', ''))
+        
+        pattern2 = r'poolAmount["\']?\s*[=:]\s*["\']?([\d,]+)'
+        match2 = re.search(pattern2, response.text)
+        if match2:
+            return float(match2.group(1).replace(',', ''))
+        
+        return None
+    except Exception as e:
+        st.warning(f"福彩网奖池获取失败: {e}")
+        return None
+
+# ==================== 数据源管理器 ====================
+class DataSourceManager:
+    """管理多个数据源，支持优先级和切换"""
+    
+    def __init__(self):
+        self.sources = {
+            'mcp': {'name': 'MCP服务', 'enabled': True, 'priority': 1, 'status': '待检测'},
+            'zhcw': {'name': '中彩网', 'enabled': True, 'priority': 2, 'status': '待检测'}
+        }
+        self.data = None
+        self.source_used = None
+        self.last_update = None
+    
+    def set_enabled(self, source_key: str, enabled: bool):
+        if source_key in self.sources:
+            self.sources[source_key]['enabled'] = enabled
+    
+    def fetch_all(self, limit: int = 200) -> bool:
+        """按优先级尝试所有启用的数据源"""
+        sorted_sources = sorted(
+            [(k, v) for k, v in self.sources.items() if v['enabled']],
+            key=lambda x: x[1]['priority']
+        )
+        
+        for source_key, source_info in sorted_sources:
+            with st.spinner(f"正在从 {source_info['name']} 获取数据..."):
+                try:
+                    if source_key == 'mcp':
+                        data = fetch_from_mcp(limit=limit)
+                    elif source_key == 'zhcw':
+                        # 获取多页数据
+                        all_data = []
+                        for page in range(1, 4):  # 获取前3页
+                            page_data = fetch_from_zhcw(page=page)
+                            if page_data:
+                                all_data.extend(page_data)
+                        data = all_data
+                    else:
+                        continue
+                    
+                    if data and len(data) > 0:
+                        # 去重（按期号）
+                        seen = set()
+                        unique_data = []
+                        for d in data:
+                            period = d.get('period', '')
+                            if period and period not in seen:
+                                seen.add(period)
+                                unique_data.append(d)
+                        
+                        source_info['status'] = f"成功获取 {len(unique_data)} 期"
+                        self.data = unique_data
+                        self.source_used = source_key
+                        self.last_update = datetime.now()
+                        
+                        # 补充奖池数据（如果MCP没有提供）
+                        if source_key != 'mcp':
+                            self._enrich_pool_data()
+                        
+                        return True
+                    else:
+                        source_info['status'] = "无数据"
+                except Exception as e:
+                    source_info['status'] = f"失败: {str(e)[:50]}"
+                    continue
+        
+        return False
+    
+    def _enrich_pool_data(self):
+        """补充奖池数据（从福彩网）"""
+        if not self.data:
+            return
+        
+        # 只补充最近的20期
+        for i, draw in enumerate(self.data[:20]):
+            if draw.get('pool', 0) == 0:
+                period = draw.get('period', '')
+                if period:
+                    pool = fetch_pool_from_cwl(period)
+                    if pool:
+                        self.data[i]['pool'] = pool
+    
+    def get_data(self) -> Optional[List[Dict]]:
+        return self.data
+    
+    def get_source_used(self) -> Optional[str]:
+        return self.source_used
+    
+    def get_status_df(self) -> pd.DataFrame:
+        """获取数据源状态DataFrame"""
+        rows = []
+        for k, v in self.sources.items():
+            rows.append({
+                '数据源': v['name'],
+                '状态': v['status'],
+                '启用': '✅' if v['enabled'] else '❌'
+            })
+        return pd.DataFrame(rows)
+    
+    def get_data_for_training(self) -> pd.DataFrame:
+        """获取用于ML训练的数据框"""
+        if not self.data:
+            return pd.DataFrame()
+        
+        records = []
+        for draw in self.data:
+            records.append({
+                'period': draw.get('period'),
+                'date': draw.get('date'),
+                'red1': draw['reds'][0] if len(draw['reds']) > 0 else 0,
+                'red2': draw['reds'][1] if len(draw['reds']) > 1 else 0,
+                'red3': draw['reds'][2] if len(draw['reds']) > 2 else 0,
+                'red4': draw['reds'][3] if len(draw['reds']) > 3 else 0,
+                'red5': draw['reds'][4] if len(draw['reds']) > 4 else 0,
+                'red6': draw['reds'][5] if len(draw['reds']) > 5 else 0,
+                'blue': draw.get('blue', 0),
+                'pool': draw.get('pool', 0),
+                'sales': draw.get('sales', 0),
+                'prize1_count': draw.get('prize1_count', 0),
+                'prize2_count': draw.get('prize2_count', 0)
+            })
+        
+        return pd.DataFrame(records)
+
+# ==================== 方法1：冷热码+和值预测 ====================
+class Method1HotColdSum:
+    """方法1：冷热码评分 + 和值动态预测"""
+    
+    def __init__(self, draws: List[Dict]):
+        self.draws = draws
+        self.red_freq = self._calculate_frequency('reds')
+        self.blue_freq = self._calculate_frequency('blue')
+        self.red_absence = self._calculate_absence('reds')
+        self.blue_absence = self._calculate_absence('blue')
+    
+    def _calculate_frequency(self, field: str) -> Dict[int, float]:
+        """计算频率"""
+        freq = {i: 0 for i in range(1, 34 if field == 'reds' else 17)}
+        total = 0
+        
+        for draw in self.draws:
+            if field == 'reds':
+                for num in draw.get('reds', []):
+                    if 1 <= num <= 33:
+                        freq[num] += 1
+                        total += 1
+            else:
+                blue = draw.get('blue', 0)
+                if 1 <= blue <= 16:
+                    freq[blue] += 1
+                    total += 1
+        
+        # 归一化
+        max_freq = max(freq.values()) if freq.values() else 1
+        for num in freq:
+            freq[num] = freq[num] / max_freq
+        
+        return freq
+    
+    def _calculate_absence(self, field: str) -> Dict[int, int]:
+        """计算遗漏期数"""
+        absence = {i: 0 for i in range(1, 34 if field == 'reds' else 17)}
+        last_seen = {i: None for i in range(1, 34 if field == 'reds' else 17)}
+        
+        for idx, draw in enumerate(reversed(self.draws)):
+            if field == 'reds':
+                for num in draw.get('reds', []):
+                    if last_seen[num] is None:
+                        last_seen[num] = idx
+            else:
+                blue = draw.get('blue', 0)
+                if last_seen.get(blue) is None:
+                    last_seen[blue] = idx
+        
+        total = len(self.draws)
+        for num in absence:
+            absence[num] = last_seen[num] if last_seen[num] is not None else total
+        
+        return absence
+    
+    def calculate_red_scores(self) -> Dict[int, float]:
+        """计算红球评分"""
+        scores = {}
+        for num in RED_NUMBERS:
+            freq_score = self.red_freq.get(num, 0)
+            absence_score = 1 - (self.red_absence.get(num, self.red_absence.get(1, 0)) / max(self.red_absence.values()))
+            score = 0.5 * freq_score + 0.5 * absence_score
+            scores[num] = score
+        return scores
+    
+    def calculate_blue_scores(self) -> Dict[int, float]:
+        """计算蓝球评分"""
+        scores = {}
+        for num in BLUE_NUMBERS:
+            freq_score = self.blue_freq.get(num, 0)
+            absence_score = 1 - (self.blue_absence.get(num, self.blue_absence.get(1, 0)) / max(self.blue_absence.values()))
+            score = 0.5 * freq_score + 0.5 * absence_score
+            scores[num] = score
+        return scores
+    
+    def get_target_sum(self) -> Tuple[int, int]:
+        """动态目标和值"""
+        if len(self.draws) < 10:
+            return RED_EXPECTED_SUM, RED_SUM_STD
+        
+        recent_sums = []
+        for draw in self.draws[-10:]:
+            reds = draw.get('reds', [])
+            if reds:
+                recent_sums.append(sum(reds))
+        
+        if not recent_sums:
+            return RED_EXPECTED_SUM, RED_SUM_STD
+        
+        short_mean = np.mean(recent_sums)
+        
+        if short_mean > RED_EXPECTED_SUM + 5:
+            target = RED_EXPECTED_SUM - 5
+        elif short_mean < RED_EXPECTED_SUM - 5:
+            target = RED_EXPECTED_SUM + 5
+        else:
+            target = RED_EXPECTED_SUM
+        
+        return int(target), RED_SUM_STD
+    
+    def generate_bets(self, num_bets: int = 4) -> List[Dict]:
+        """生成投注组合"""
+        red_scores = self.calculate_red_scores()
+        blue_scores = self.calculate_blue_scores()
+        
+        # 权重转换
+        red_weights = [math.exp(red_scores.get(i, 0)) for i in RED_NUMBERS]
+        blue_weights = [math.exp(blue_scores.get(i, 0)) for i in BLUE_NUMBERS]
+        
+        target_sum, tolerance = self.get_target_sum()
+        
+        bets = []
+        for _ in range(num_bets):
+            for _ in range(100):
+                reds = np.random.choice(RED_NUMBERS, size=6, replace=False, p=red_weights/np.sum(red_weights))
+                reds = sorted(reds.tolist())
+                if abs(sum(reds) - target_sum) <= tolerance:
+                    blues = np.random.choice(BLUE_NUMBERS, size=1, p=blue_weights/np.sum(blue_weights))
+                    bets.append({
+                        'reds': reds,
+                        'blue': blues[0],
+                        'sum': sum(reds),
+                        'method': '方法1:冷热码+和值'
+                    })
+                    break
+            else:
+                reds = sorted(np.random.choice(RED_NUMBERS, size=6, replace=False))
+                blue = np.random.choice(BLUE_NUMBERS)
+                bets.append({
+                    'reds': reds,
+                    'blue': blue,
+                    'sum': sum(reds),
+                    'method': '方法1:冷热码+和值'
+                })
+        
+        return bets
+
+# ==================== 方法2：胆拖混合 ====================
+class Method2DanTuo:
+    """方法2：胆拖混合（胆码锁定+拖码生成）"""
+    
+    def __init__(self, draws: List[Dict]):
+        self.draws = draws
+        self.method1 = Method1HotColdSum(draws)
+    
+    def select_anchors(self, num_anchors: int = 2) -> List[int]:
+        """选择胆码"""
+        red_scores = self.method1.calculate_red_scores()
+        
+        # 优先选择上期号码
+        if self.draws:
+            last_reds = self.draws[-1].get('reds', [])
+            for num in last_reds:
+                if num in red_scores:
+                    red_scores[num] += 0.3
+        
+        # 按得分排序
+        sorted_nums = sorted(red_scores.items(), key=lambda x: x[1], reverse=True)
+        return [num for num, _ in sorted_nums[:num_anchors]]
+    
+    def generate_bets(self, num_bets: int = 4) -> List[Dict]:
+        """生成投注组合"""
+        anchors = self.select_anchors()
+        red_scores = self.method1.calculate_red_scores()
+        blue_scores = self.method1.calculate_blue_scores()
+        
+        # 降低胆码的权重（避免重复）
+        for a in anchors:
+            red_scores[a] = 0.1
+        
+        red_weights = [math.exp(red_scores.get(i, 0)) for i in RED_NUMBERS]
+        blue_weights = [math.exp(blue_scores.get(i, 0)) for i in BLUE_NUMBERS]
+        
+        target_sum, tolerance = self.method1.get_target_sum()
+        
+        bets = []
+        for _ in range(num_bets):
+            needed = 6 - len(anchors)
+            for _ in range(100):
+                candidates = [i for i in RED_NUMBERS if i not in anchors]
+                candidate_weights = [red_weights[i-1] for i in candidates]
+                if not candidates:
+                    break
+                selected = np.random.choice(candidates, size=needed, replace=False, 
+                                           p=np.array(candidate_weights)/np.sum(candidate_weights))
+                reds = sorted(anchors + selected.tolist())
+                if abs(sum(reds) - target_sum) <= tolerance:
+                    blue = np.random.choice(BLUE_NUMBERS, p=blue_weights/np.sum(blue_weights))
+                    bets.append({
+                        'reds': reds,
+                        'blue': blue,
+                        'sum': sum(reds),
+                        'method': f'方法2:胆拖混合 (胆码:{anchors})'
+                    })
+                    break
+            else:
+                candidates = [i for i in RED_NUMBERS if i not in anchors]
+                selected = np.random.choice(candidates, size=needed, replace=False)
+                reds = sorted(anchors + selected.tolist())
+                blue = np.random.choice(BLUE_NUMBERS)
+                bets.append({
+                    'reds': reds,
+                    'blue': blue,
+                    'sum': sum(reds),
+                    'method': f'方法2:胆拖混合 (胆码:{anchors})'
+                })
+        
+        return bets
+
+# ==================== 方法3：LightGBM ====================
+class Method3LightGBM:
+    """方法3：LightGBM梯度提升树"""
+    
+    def __init__(self, draws: List[Dict]):
+        self.draws = draws
+        self.model = None
+        self.is_trained = False
+    
+    def _extract_features(self, window_draws: List[Dict], target_num: int) -> Optional[Dict]:
+        """提取单个号码的特征"""
+        if len(window_draws) < 20:
+            return None
+        
+        features = {}
+        
+        # 历史频率
+        total = len(window_draws)
+        freq = sum(1 for d in window_draws if target_num in d.get('reds', []))
+        features['freq'] = freq / total if total > 0 else 0
+        
+        # 遗漏期数
+        last_seen = None
+        for idx, d in enumerate(reversed(window_draws)):
+            if target_num in d.get('reds', []):
+                last_seen = idx
+                break
+        features['absence'] = last_seen if last_seen is not None else total
+        
+        # 最近10期频率
+        recent = window_draws[-10:] if len(window_draws) >= 10 else window_draws
+        recent_freq = sum(1 for d in recent if target_num in d.get('reds', []))
+        features['recent_freq'] = recent_freq / len(recent) if recent else 0
+        
+        # 上期是否出现
+        if window_draws:
+            features['last_appeared'] = 1 if target_num in window_draws[-1].get('reds', []) else 0
+        
+        # 分区特征
+        zone = (target_num - 1) // 11 + 1
+        features['zone'] = zone
+        
+        # 奇偶
+        features['parity'] = target_num % 2
+        
+        # 大小（1-16小，17-33大）
+        features['size'] = 0 if target_num <= 16 else 1
+        
+        return features
+    
+    def train(self) -> bool:
+        """训练模型"""
+        if not LGB_AVAILABLE or len(self.draws) < 100:
+            return False
+        
+        X_list = []
+        y_list = []
+        
+        for i in range(50, len(self.draws) - 1):
+            window = self.draws[i-50:i]
+            next_draw = self.draws[i]
+            
+            for num in RED_NUMBERS:
+                features = self._extract_features(window, num)
+                if features:
+                    X_list.append(features)
+                    y_list.append(1 if num in next_draw.get('reds', []) else 0)
+        
+        if not X_list:
+            return False
+        
+        X_df = pd.DataFrame(X_list).fillna(0)
+        y_series = pd.Series(y_list)
+        
+        try:
+            self.model = lgb.LGBMClassifier(
+                n_estimators=100,
+                max_depth=5,
+                learning_rate=0.1,
+                random_state=42,
+                verbose=-1
+            )
+            self.model.fit(X_df, y_series)
+            self.is_trained = True
+            return True
+        except Exception as e:
+            st.warning(f"LightGBM训练失败: {e}")
+            return False
+    
+    def predict(self) -> List[int]:
+        """预测下期红球"""
+        if not self.is_trained or not self.model:
+            return []
+        
+        predictions = []
+        for num in RED_NUMBERS:
+            features = self._extract_features(self.draws, num)
+            if features:
+                X_pred = pd.DataFrame([features]).fillna(0)
+                prob = self.model.predict_proba(X_pred)[0][1]
+                predictions.append((num, prob))
+        
+        predictions.sort(key=lambda x: x[1], reverse=True)
+        return [num for num, _ in predictions[:6]]
+    
+    def generate_bets(self, num_bets: int = 4) -> List[Dict]:
+        """生成投注组合"""
+        if not self.is_trained:
+            self.train()
+        
+        # 如果训练失败，使用方法1作为备选
+        if not self.is_trained:
+            method1 = Method1HotColdSum(self.draws)
+            return method1.generate_bets(num_bets)
+        
+        predicted_reds = self.predict()
+        blue_scores = Method1HotColdSum(self.draws).calculate_blue_scores()
+        blue_weights = [math.exp(blue_scores.get(i, 0)) for i in BLUE_NUMBERS]
+        
+        bets = []
+        for _ in range(num_bets):
+            # 使用预测的红球，微调
+            reds = predicted_reds[:]
+            if len(reds) < 6:
+                missing = [n for n in RED_NUMBERS if n not in reds]
+                extra = np.random.choice(missing, size=6-len(reds), replace=False)
+                reds.extend(extra)
+            
+            # 随机替换1-2个
+            replace_count = np.random.randint(1, 3)
+            for _ in range(replace_count):
+                idx = np.random.randint(0, len(reds))
+                candidates = [n for n in RED_NUMBERS if n not in reds]
+                if candidates:
+                    reds[idx] = np.random.choice(candidates)
+            
+            reds = sorted(reds[:6])
+            blue = np.random.choice(BLUE_NUMBERS, p=blue_weights/np.sum(blue_weights))
+            
+            bets.append({
+                'reds': reds,
+                'blue': blue,
+                'sum': sum(reds),
+                'method': '方法3:LightGBM'
+            })
+        
+        return bets
+
+# ==================== 方法4：XGBoost+神经网络集成 ====================
+class Method4Ensemble:
+    """方法4：XGBoost + 神经网络集成"""
+    
+    def __init__(self, draws: List[Dict]):
+        self.draws = draws
+        self.xgb_model = None
+        self.nn_model = None
+        self.scaler = None
+        self.is_trained = False
+    
+    def _extract_features_advanced(self, window_draws: List[Dict], target_num: int) -> Optional[Dict]:
+        """提取高级特征"""
+        if len(window_draws) < 30:
+            return None
+        
+        features = {}
+        total = len(window_draws)
+        
+        # 基础频率
+        freq = sum(1 for d in window_draws if target_num in d.get('reds', []))
+        features['freq'] = freq / total
+        
+        # 遗漏
+        last_seen = None
+        for idx, d in enumerate(reversed(window_draws)):
+            if target_num in d.get('reds', []):
+                last_seen = idx
+                break
+        features['absence'] = last_seen if last_seen is not None else total
+        features['absence_norm'] = features['absence'] / total
+        
+        # 近期趋势
+        for window in [3, 5, 10]:
+            recent = window_draws[-window:] if len(window_draws) >= window else window_draws
+            recent_freq = sum(1 for d in recent if target_num in d.get('reds', []))
+            features[f'recent_{window}'] = recent_freq / len(recent) if recent else 0
+        
+        # 上期关系
+        if window_draws:
+            last_reds = window_draws[-1].get('reds', [])
+            features['last_appeared'] = 1 if target_num in last_reds else 0
+            if last_reds:
+                features['min_diff_to_last'] = min(abs(target_num - n) for n in last_reds)
+            else:
+                features['min_diff_to_last'] = 99
+        
+        # 分区
+        zone = (target_num - 1) // 11 + 1
+        features['zone'] = zone
+        
+        # 统计特征
+        features['parity'] = target_num % 2
+        features['size'] = 0 if target_num <= 16 else 1
+        
+        # 尾数
+        features['tail'] = target_num % 10
+        
+        return features
+    
+    def train(self) -> bool:
+        """训练集成模型"""
+        if (not XGB_AVAILABLE or not SKLEARN_AVAILABLE) or len(self.draws) < 150:
+            return False
+        
+        X_list = []
+        y_list = []
+        
+        for i in range(80, len(self.draws) - 1):
+            window = self.draws[i-80:i]
+            next_draw = self.draws[i]
+            
+            for num in RED_NUMBERS:
+                features = self._extract_features_advanced(window, num)
+                if features:
+                    X_list.append(features)
+                    y_list.append(1 if num in next_draw.get('reds', []) else 0)
+        
+        if not X_list or len(X_list) < 1000:
+            return False
+        
+        X_df = pd.DataFrame(X_list).fillna(0)
+        y_series = pd.Series(y_list)
+        
+        try:
+            # XGBoost
+            self.xgb_model = xgb.XGBClassifier(
+                n_estimators=100,
+                max_depth=4,
+                learning_rate=0.1,
+                random_state=42,
+                use_label_encoder=False,
+                eval_metric='logloss',
+                verbosity=0
+            )
+            self.xgb_model.fit(X_df, y_series)
+            
+            # 神经网络
+            self.scaler = StandardScaler()
+            X_scaled = self.scaler.fit_transform(X_df)
+            self.nn_model = MLPClassifier(
+                hidden_layer_sizes=(32, 16),
+                activation='relu',
+                max_iter=100,
+                random_state=42,
+                early_stopping=True,
+                validation_fraction=0.1
+            )
+            self.nn_model.fit(X_scaled, y_series)
+            
+            self.is_trained = True
+            return True
+        except Exception as e:
+            st.warning(f"集成模型训练失败: {e}")
+            return False
+    
+    def predict(self) -> List[int]:
+        """预测下期红球"""
+        if not self.is_trained:
+            return []
+        
+        predictions = []
+        for num in RED_NUMBERS:
+            features = self._extract_features_advanced(self.draws, num)
+            if features:
+                X_pred = pd.DataFrame([features]).fillna(0)
+                
+                # XGBoost预测
+                xgb_prob = self.xgb_model.predict_proba(X_pred)[0][1]
+                
+                # 神经网络预测
+                X_scaled = self.scaler.transform(X_pred)
+                nn_prob = self.nn_model.predict_proba(X_scaled)[0][1]
+                
+                # 加权融合
+                ensemble_prob = 0.5 * xgb_prob + 0.5 * nn_prob
+                predictions.append((num, ensemble_prob))
+        
+        predictions.sort(key=lambda x: x[1], reverse=True)
+        return [num for num, _ in predictions[:6]]
+    
+    def generate_bets(self, num_bets: int = 4) -> List[Dict]:
+        """生成投注组合"""
+        if not self.is_trained:
+            self.train()
+        
+        if not self.is_trained:
+            method1 = Method1HotColdSum(self.draws)
+            return method1.generate_bets(num_bets)
+        
+        predicted_reds = self.predict()
+        blue_scores = Method1HotColdSum(self.draws).calculate_blue_scores()
+        blue_weights = [math.exp(blue_scores.get(i, 0)) for i in BLUE_NUMBERS]
+        
+        bets = []
+        for _ in range(num_bets):
+            reds = predicted_reds[:]
+            if len(reds) < 6:
+                missing = [n for n in RED_NUMBERS if n not in reds]
+                extra = np.random.choice(missing, size=6-len(reds), replace=False)
+                reds.extend(extra)
+            
+            reds = sorted(reds[:6])
+            blue = np.random.choice(BLUE_NUMBERS, p=blue_weights/np.sum(blue_weights))
+            
+            bets.append({
+                'reds': reds,
+                'blue': blue,
+                'sum': sum(reds),
+                'method': '方法4:XGBoost+NN集成'
+            })
+        
+        return bets
+
+# ==================== 投注生成工厂 ====================
+class BetGenerator:
+    """投注生成工厂类"""
+    
+    @staticmethod
+    def generate(method: str, draws: List[Dict], num_bets: int = 4) -> List[Dict]:
+        """根据方法名称生成投注"""
+        if method == "方法1: 当前方法":
+            generator = Method1HotColdSum(draws)
+        elif method == "方法2: 胆拖混合":
+            generator = Method2DanTuo(draws)
+        elif method == "方法3: LightGBM":
+            generator = Method3LightGBM(draws)
+        elif method == "方法4: XGBoost+NN集成":
+            generator = Method4Ensemble(draws)
+        else:
+            generator = Method1HotColdSum(draws)
+        
+        return generator.generate_bets(num_bets)
 
 # ==================== DeepSeek AI 建议 ====================
-def get_deepseek_suggestion(jackpot, sales, weekday, ml_signals):
+def get_deepseek_suggestion(draws: List[Dict], source_used: str, ml_signals: Dict) -> Dict:
     """获取DeepSeek AI的投注建议"""
-    if not DEEPSEEK_API_KEY or DEEPSEEK_API_KEY == "sk-7136425b4866479fa6ed9181bf2c1b7c":
-        return fallback_suggestion(ml_signals)
+    if not DEEPSEEK_API_KEY or len(draws) < 10:
+        return {
+            "plan": "4组7+1复式",
+            "win_rate": "30-35%",
+            "blue_advice": "均衡选择",
+            "summary": "请配置DeepSeek API Key获取AI建议"
+        }
+    
+    # 计算热号
+    red_scores = Method1HotColdSum(draws).calculate_red_scores()
+    blue_scores = Method1HotColdSum(draws).calculate_blue_scores()
+    
+    top_reds = sorted(red_scores.items(), key=lambda x: x[1], reverse=True)[:6]
+    top_blues = sorted(blue_scores.items(), key=lambda x: x[1], reverse=True)[:3]
     
     try:
-        prompt = f"""你是双色球AI分析专家。基于以下数据，给出投注建议：
+        prompt = f"""你是双色球AI分析专家。基于以下数据给出投注建议（JSON格式）：
 
-【市场数据】
-- 奖池金额：{jackpot/1e8:.1f}亿元 ({jackpot:,.0f}元)
-- 上期投注额：{sales/1e8:.1f}亿元
-- 开奖日：{weekday}
+【数据来源】{source_used}
+【历史数据量】{len(draws)}期
+【红球热号Top6】{[r[0] for r in top_reds]}
+【蓝球热号Top3】{[b[0] for b in top_blues]}
+【剪刀差信号】{ml_signals.get('scissors', '正常')}
+【奖池阈值】{ml_signals.get('jackpot_level', '正常')}
 
-【ML信号】
-- 奖池阈值：{ml_signals.get('jackpot_level', '正常')}
-- 剪刀差信号：{ml_signals.get('scissors', '正常')}
-- 头奖周期：{ml_signals.get('cycle', '正常')}
-- 蓝球偏向：{ml_signals.get('blue_bias', '均衡')}
-
-请按以下JSON格式回复（不要有其他内容）：
-{{"plan": "推荐方案", "win_rate": "预期赢率%", "blue_advice": "蓝球建议", "summary": "一句话总结"}}
+请按此JSON格式回复（只有JSON）：
+{{"plan": "推荐方案(7+1/7+2/观望)", "win_rate": "预期赢率%", "blue_advice": "蓝球建议", "summary": "一句话总结"}}
 """
-        
         response = requests.post(
             f"{DEEPSEEK_BASE_URL}/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": DEEPSEEK_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.7,
-                "max_tokens": 300
-            },
+            headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
+            json={"model": DEEPSEEK_MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.7, "max_tokens": 300},
             timeout=10
         )
         
         if response.status_code == 200:
             content = response.json()['choices'][0]['message']['content']
-            import re
             json_match = re.search(r'\{[^{}]*\}', content)
             if json_match:
                 return json.loads(json_match.group())
-        return fallback_suggestion(ml_signals)
     except Exception as e:
         st.warning(f"DeepSeek API调用失败: {e}")
-        return fallback_suggestion(ml_signals)
-
-def fallback_suggestion(ml_signals):
-    """降级建议"""
+    
     return {
         "plan": "4组7+1复式",
-        "win_rate": "32-35%",
-        "blue_advice": "侧重小号(1-8)",
-        "summary": "根据ML信号，本期适合标准投注策略"
+        "win_rate": "30-35%",
+        "blue_advice": f"推荐蓝球{top_blues[0][0] if top_blues else 8}",
+        "summary": f"基于{len(draws)}期历史数据，红球热号集中在{top_reds[0][0] if top_reds else 1}附近"
     }
 
-# ==================== 双色球专用函数 ====================
-def calculate_red_scores(draws, window_total=100, window_short=20, window_recent=10):
-    """计算红球评分"""
-    if len(draws) < window_total:
-        window_total = len(draws)
-    
-    total_draws = len(draws)
-    expected_freq = total_draws * 6 / 33
-    
-    recent_draws_total = draws[-window_total:] if len(draws) >= window_total else draws
-    recent_draws_short = draws[-window_short:] if len(draws) >= window_short else draws
-    recent_draws_window = draws[-window_recent:] if len(draws) >= window_recent else draws
-    
-    freq = {i: 0 for i in range(1, 34)}
-    for draw in recent_draws_total:
-        for num in draw['numbers']:
-            freq[num] += 1
-    
-    short_freq = {i: 0 for i in range(1, 34)}
-    for draw in recent_draws_short:
-        for num in draw['numbers']:
-            short_freq[num] += 1
-    expected_short = window_short * 6 / 33
-    
-    last_seen = {i: None for i in range(1, 34)}
-    for idx, draw in enumerate(reversed(draws)):
-        for num in draw['numbers']:
-            if last_seen[num] is None:
-                last_seen[num] = idx
-    absence = {i: last_seen[i] if last_seen[i] is not None else total_draws for i in range(1, 34)}
-    
-    recent_numbers = set()
-    for draw in recent_draws_window:
-        recent_numbers.update(draw['numbers'])
-    
-    freq_mean = expected_freq
-    freq_vals = list(freq.values())
-    freq_std = np.std(freq_vals) if len(freq_vals) > 1 else 1
-    
-    absence_vals = list(absence.values())
-    absence_mean = np.mean(absence_vals)
-    absence_std = np.std(absence_vals) if len(absence_vals) > 1 else 1
-    
-    short_vals = list(short_freq.values())
-    short_mean = expected_short
-    short_std = np.std(short_vals) if len(short_vals) > 1 else 1
-    
-    scores = {}
-    for i in range(1, 34):
-        z_freq = (freq[i] - freq_mean) / freq_std if freq_std > 0 else 0
-        z_absence = (absence_mean - absence[i]) / absence_std if absence_std > 0 else 0
-        z_short = (short_freq[i] - short_mean) / short_std if short_std > 0 else 0
-        recent_active = 1 if i in recent_numbers else -1
-        
-        score = 0.3 * z_freq + 0.3 * z_absence + 0.2 * z_short + 0.2 * recent_active
-        scores[i] = score
-    
-    return scores, freq, short_freq, absence
-
-def calculate_blue_scores(draws, window_total=50):
-    """计算蓝球评分"""
-    if len(draws) < window_total:
-        window_total = len(draws)
-    
-    recent_draws = draws[-window_total:] if len(draws) >= window_total else draws
-    
-    freq = {i: 0 for i in range(1, 17)}
-    for draw in recent_draws:
-        special = draw.get('special')
-        if special:
-            freq[special] += 1
-    
-    last_seen = {i: None for i in range(1, 17)}
-    for idx, draw in enumerate(reversed(draws)):
-        special = draw.get('special')
-        if special and last_seen[special] is None:
-            last_seen[special] = idx
-    
-    total_draws = len(draws)
-    absence = {i: last_seen[i] if last_seen[i] is not None else total_draws for i in range(1, 17)}
-    
-    max_freq = max(freq.values()) if freq.values() else 1
-    max_absence = max(absence.values()) if absence.values() else 1
-    
-    scores = {}
-    for i in range(1, 17):
-        freq_score = freq[i] / max_freq if max_freq > 0 else 0
-        absence_score = 1 - (absence[i] / max_absence) if max_absence > 0 else 0
-        scores[i] = 0.6 * freq_score + 0.4 * absence_score
-    
-    return scores
-
-def get_sampling_weights(scores, temperature=1.5):
-    """获取采样权重"""
-    weights = {}
-    for num, score in scores.items():
-        weights[num] = math.exp(score / temperature)
-    return weights
-
-def weighted_random_sample(weights, k=6, max_attempts=100):
-    """加权随机采样"""
-    numbers = list(weights.keys())
-    weight_list = [weights[n] for n in numbers]
-    
-    for _ in range(max_attempts):
-        selected = random.choices(population=numbers, weights=weight_list, k=k)
-        if len(set(selected)) == k:
-            return sorted(selected)
-    
-    return sorted(random.sample(numbers, k))
-
-def generate_one_combination(weights, num_count, target_sum, tolerance):
-    """生成一组组合"""
-    max_attempts = 5000
-    for _ in range(max_attempts):
-        selected = weighted_random_sample(weights, k=num_count)
-        total = sum(selected)
-        if abs(total - target_sum) <= tolerance:
-            return selected, total
-    
-    selected = weighted_random_sample(weights, k=num_count)
-    return selected, sum(selected)
-
-def get_dynamic_sum_range(draws, num_count=6, window=4):
-    """动态和值预测"""
-    if len(draws) < window:
-        return 102, 12, "正常", "数据不足", 102, 12, 102
-    
-    recent_draws = draws[-100:] if len(draws) >= 100 else draws
-    all_sums = [d['sum'] for d in recent_draws]
-    long_term_mean = np.mean(all_sums) if all_sums else 102
-    long_term_std = np.std(all_sums) if len(all_sums) > 1 else 12
-    
-    short_draws = draws[-window:] if len(draws) >= window else draws
-    short_sums = [d['sum'] for d in short_draws]
-    short_mean = np.mean(short_sums) if short_sums else long_term_mean
-    
-    threshold = long_term_std * 0.1
-    
-    if short_mean > long_term_mean + threshold:
-        target = long_term_mean - long_term_std * 0.5
-        direction = "偏大回归"
-        direction_desc = f"📈 偏大 (最近{window}期均值={short_mean:.1f})"
-    elif short_mean < long_term_mean - threshold:
-        target = long_term_mean + long_term_std * 0.5
-        direction = "偏小回归"
-        direction_desc = f"📉 偏小 (最近{window}期均值={short_mean:.1f})"
-    else:
-        target = long_term_mean
-        direction = "正常"
-        direction_desc = f"⚖️ 正常 (最近{window}期均值={short_mean:.1f})"
-    
-    tolerance = max(8, int(long_term_std * 0.5))
-    
-    return int(target), tolerance, direction, direction_desc, long_term_mean, long_term_std, short_mean
-
-# ==================== 投注生成函数 ====================
-def generate_bets_method1(draws, num_bets, num_red=6, num_blue=1):
-    """方法1：冷热码+和值"""
-    if len(draws) < 10:
-        return []
-    
-    red_scores, _, _, _ = calculate_red_scores(draws)
-    blue_scores = calculate_blue_scores(draws)
-    
-    weights_red = get_sampling_weights(red_scores, temperature=1.5)
-    weights_blue = get_sampling_weights(blue_scores, temperature=1.0)
-    
-    target_sum, tolerance, _, _, _, _, _ = get_dynamic_sum_range(draws, num_red)
-    
-    bets = []
-    for i in range(num_bets):
-        # 生成红球
-        reds, total = generate_one_combination(weights_red, num_red, target_sum, tolerance)
-        # 生成蓝球
-        blues = weighted_random_sample(weights_blue, k=num_blue)
-        bets.append({
-            'reds': sorted(reds),
-            'blues': sorted(blues),
-            'sum': total,
-            'method': '当前方法'
-        })
-    
-    return bets
-
-def generate_bets_method2(draws, num_bets, num_red=6, num_blue=1):
-    """方法2：胆拖混合"""
-    return generate_bets_method1(draws, num_bets, num_red, num_blue)
-
-def generate_bets_method3(draws, num_bets, num_red=6, num_blue=1):
-    """方法3：LightGBM"""
-    if not LGB_AVAILABLE:
-        return generate_bets_method1(draws, num_bets, num_red, num_blue)
-    return generate_bets_method1(draws, num_bets, num_red, num_blue)
-
-def generate_bets_method4(draws, num_bets, num_red=6, num_blue=1):
-    """方法4：XGBoost+NN集成"""
-    if not XGB_AVAILABLE:
-        return generate_bets_method1(draws, num_bets, num_red, num_blue)
-    return generate_bets_method1(draws, num_bets, num_red, num_blue)
-
 # ==================== ML信号计算 ====================
-def calculate_ml_signals(draws):
+def calculate_ml_signals(draws: List[Dict]) -> Dict:
     """计算ML特征信号"""
     if not draws or len(draws) < 10:
         return {
@@ -497,36 +1008,40 @@ def calculate_ml_signals(draws):
             'scissors': '数据不足',
             'cycle': '数据不足',
             'blue_bias': '均衡',
-            'pool': 0,
-            'sales': 0
+            'signal_strength': 0
         }
     
     latest = draws[-1]
-    pool = latest.get('pool_amount', 0)
-    sales = latest.get('total_sales', 0)
+    pool = latest.get('pool', 0)
+    sales = latest.get('sales', 0)
     
     # 奖池阈值
     if pool >= 250000000:
         jackpot_level = "HIGH (≥2.5亿)"
+        signal_strength = 30
     elif pool >= 150000000:
         jackpot_level = "MEDIUM (1.5-2.5亿)"
+        signal_strength = 15
     else:
         jackpot_level = "LOW (<1.5亿)"
+        signal_strength = 0
     
     # 剪刀差信号
     if len(draws) >= 2:
         prev = draws[-2]
-        prev_pool = prev.get('pool_amount', 0)
-        prev_sales = prev.get('total_sales', 0)
+        prev_pool = prev.get('pool', 0)
+        prev_sales = prev.get('sales', 0)
         
         if prev_pool > 0 and prev_sales > 0:
-            pool_change = (pool - prev_pool) / prev_pool if prev_pool > 0 else 0
             sales_change = (sales - prev_sales) / prev_sales if prev_sales > 0 else 0
+            pool_change = (pool - prev_pool) / prev_pool if prev_pool > 0 else 0
             
             if sales_change > 0.05 and pool_change < -0.03:
                 scissors = "HIGH_ALERT (头奖爆发预警)"
+                signal_strength += 40
             elif sales_change > 0.03:
                 scissors = "MEDIUM (投注活跃)"
+                signal_strength += 20
             else:
                 scissors = "NORMAL"
         else:
@@ -538,14 +1053,16 @@ def calculate_ml_signals(draws):
     recent_prizes = [d.get('prize1_count', 0) for d in draws[-20:]]
     high_prize_count = sum(1 for p in recent_prizes if p >= 10)
     if high_prize_count >= 3:
-        cycle = "冷却期 (近期头奖较多)"
+        cycle = "冷却期"
+        signal_strength -= 20
     elif high_prize_count == 0:
-        cycle = "积累期 (长期无头奖)"
+        cycle = "积累期"
+        signal_strength += 10
     else:
         cycle = "正常期"
     
     # 蓝球偏向
-    recent_blues = [d.get('special', 0) for d in draws[-20:] if d.get('special')]
+    recent_blues = [d.get('blue', 0) for d in draws[-20:] if d.get('blue', 0) > 0]
     if recent_blues:
         small_count = sum(1 for b in recent_blues if b <= 8)
         if small_count >= 12:
@@ -557,17 +1074,144 @@ def calculate_ml_signals(draws):
     else:
         blue_bias = "均衡"
     
+    # 信号强度归一化到0-100
+    signal_strength = max(0, min(100, signal_strength))
+    
+    # 投注建议
+    if signal_strength >= 60:
+        bet_suggestion = "strong"
+        suggestion_text = "🔔 强烈推荐投注"
+    elif signal_strength >= 30:
+        bet_suggestion = "medium"
+        suggestion_text = "⚠️ 谨慎投注"
+    else:
+        bet_suggestion = "weak"
+        suggestion_text = "💤 建议观望"
+    
     return {
         'jackpot_level': jackpot_level,
         'scissors': scissors,
         'cycle': cycle,
         'blue_bias': blue_bias,
+        'signal_strength': signal_strength,
+        'bet_suggestion': bet_suggestion,
+        'suggestion_text': suggestion_text,
         'pool': pool,
         'sales': sales
     }
 
+# ==================== Supabase数据操作 ====================
+def save_draws_to_supabase(draws: List[Dict]) -> int:
+    """保存数据到Supabase（去重）"""
+    supabase = init_supabase()
+    if supabase is None:
+        return 0
+    
+    try:
+        # 获取现有期号
+        existing = supabase.schema('ssq_schema').table('ssq_draws').select("period").execute()
+        existing_periods = set([str(row['period']) for row in existing.data]) if existing.data else set()
+        
+        new_count = 0
+        for draw in draws:
+            period = str(draw.get('period', ''))
+            if not period or period in existing_periods:
+                continue
+            
+            reds = draw.get('reds', [])
+            data = {
+                "period": period,
+                "date": draw.get('date'),
+                "red1": reds[0] if len(reds) > 0 else 0,
+                "red2": reds[1] if len(reds) > 1 else 0,
+                "red3": reds[2] if len(reds) > 2 else 0,
+                "red4": reds[3] if len(reds) > 3 else 0,
+                "red5": reds[4] if len(reds) > 4 else 0,
+                "red6": reds[5] if len(reds) > 5 else 0,
+                "blue": draw.get('blue', 0),
+                "pool_amount": draw.get('pool', 0),
+                "total_sales": draw.get('sales', 0),
+                "prize1_count": draw.get('prize1_count', 0),
+                "prize1_amount": draw.get('prize1_amount', 0),
+                "prize2_count": draw.get('prize2_count', 0),
+                "prize2_amount": draw.get('prize2_amount', 0)
+            }
+            supabase.schema('ssq_schema').table('ssq_draws').insert(data).execute()
+            new_count += 1
+        
+        return new_count
+    except Exception as e:
+        st.error(f"保存失败: {e}")
+        return 0
+
+def load_from_supabase(limit: int = 500) -> Optional[List[Dict]]:
+    """从Supabase加载数据"""
+    supabase = init_supabase()
+    if supabase is None:
+        return None
+    
+    try:
+        response = supabase.schema('ssq_schema').table('ssq_draws').select("*").order("period", desc=False).limit(limit).execute()
+        draws = []
+        for row in response.data:
+            draws.append({
+                'period': row.get('period'),
+                'date': row.get('date'),
+                'reds': [row.get('red1'), row.get('red2'), row.get('red3'), 
+                        row.get('red4'), row.get('red5'), row.get('red6')],
+                'blue': row.get('blue'),
+                'pool': row.get('pool_amount', 0),
+                'sales': row.get('total_sales', 0),
+                'prize1_count': row.get('prize1_count', 0),
+                'prize2_count': row.get('prize2_count', 0)
+            })
+        return draws
+    except Exception as e:
+        st.error(f"从Supabase加载失败: {e}")
+        return None
+
+# ==================== 多期查奖 ====================
+def parse_check_draws(text: str) -> List[Dict]:
+    """解析查奖数据"""
+    lines = text.strip().split('\n')
+    draws = []
+    for line in lines[:5]:
+        parts = line.replace(',', ' ').split()
+        if len(parts) >= 9:
+            try:
+                draws.append({
+                    'period': parts[0],
+                    'reds': [int(parts[i]) for i in range(2, 8)],
+                    'blue': int(parts[8])
+                })
+            except:
+                continue
+    return draws
+
+def calculate_prize(bet: Dict, draw: Dict) -> str:
+    """计算单注中奖"""
+    red_matches = len(set(bet['reds']) & set(draw['reds']))
+    blue_match = (bet['blue'] == draw['blue'])
+    
+    if red_matches == 6 and blue_match:
+        return "🏆 一等奖 (浮动)"
+    elif red_matches == 6:
+        return "🥈 二等奖 (浮动)"
+    elif red_matches == 5 and blue_match:
+        return "🥉 三等奖 3000元"
+    elif red_matches == 5 or (red_matches == 4 and blue_match):
+        return "📦 四等奖 200元"
+    elif red_matches == 4 or (red_matches == 3 and blue_match):
+        return "🎫 五等奖 10元"
+    elif blue_match:
+        return "⭐ 六等奖 5元"
+    elif red_matches == 3:
+        return "🎁 福运奖 5元 (新规)"
+    else:
+        return "❌ 未中奖"
+
 # ==================== 管理员函数 ====================
-def check_password(password):
+def check_password(password: str) -> bool:
     return hmac.compare_digest(password, "Ku_product$2026")
 
 def admin_login():
@@ -590,102 +1234,122 @@ def admin_logout():
         st.session_state['show_admin'] = False
         st.rerun()
 
-def show_admin_page():
+def show_admin_page(data_manager: DataSourceManager):
     """管理员页面"""
     with st.expander("🔧 管理员控制台", expanded=True):
-        st.subheader("📡 数据同步")
-        
-        current_draws = load_draws_from_supabase()
-        if current_draws:
-            st.success(f"✅ 当前云端有 {len(current_draws)} 期数据")
-            if len(current_draws) > 0:
-                st.info(f"📊 数据范围: {current_draws[0].get('period')} 到 {current_draws[-1].get('period')}")
-        else:
-            st.info("📭 云端暂无数据")
+        st.subheader("📡 数据源状态")
+        status_df = data_manager.get_status_df()
+        st.dataframe(status_df, use_container_width=True, hide_index=True)
         
         st.markdown("---")
-        
-        st.subheader("🔄 从getssq同步最新数据")
+        st.subheader("🔌 数据源开关")
         
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("📥 获取并同步最新数据", type="primary", key="sync_getssq"):
-                with st.spinner("正在从getssq获取数据..."):
-                    if GETSSQ_AVAILABLE:
-                        data = fetch_latest_from_getssq()
-                        if data:
-                            st.success(f"获取到 {len(data)} 期数据")
-                            if sync_draws_to_supabase(data):
-                                st.balloons()
-                                st.rerun()
-                    else:
-                        st.error("getssq未安装，请运行: pip install getssq")
-        
+            mcp_enabled = st.checkbox("启用MCP服务", value=data_manager.sources['mcp']['enabled'], key="mcp_toggle")
+            data_manager.set_enabled('mcp', mcp_enabled)
         with col2:
-            st.caption("getssq会自动获取最新双色球开奖数据")
+            zhcw_enabled = st.checkbox("启用中彩网爬虫", value=data_manager.sources['zhcw']['enabled'], key="zhcw_toggle")
+            data_manager.set_enabled('zhcw', zhcw_enabled)
         
         st.markdown("---")
+        st.subheader("🔄 数据同步")
         
-        st.subheader("📁 数据管理")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("📥 立即同步所有数据源", type="primary"):
+                with st.spinner("正在获取数据..."):
+                    if data_manager.fetch_all():
+                        st.success(f"数据获取成功！来源：{data_manager.get_source_used()}")
+                        # 保存到Supabase
+                        draws = data_manager.get_data()
+                        if draws:
+                            new_count = save_draws_to_supabase(draws)
+                            st.success(f"已同步 {new_count} 期新数据到Supabase")
+                        st.rerun()
+                    else:
+                        st.error("所有数据源均获取失败")
         
-        if current_draws:
-            st.markdown("**最新10期数据预览**")
-            preview_df = pd.DataFrame(current_draws[-10:])
-            preview_cols = ['period', 'date', 'numbers', 'special', 'pool_amount', 'total_sales']
-            preview_df = preview_df[[c for c in preview_cols if c in preview_df.columns]]
-            st.dataframe(preview_df, use_container_width=True, hide_index=True)
-            
-            if st.button("🗑️ 清空所有数据", type="secondary"):
+        with col2:
+            st.caption("系统会按优先级自动切换数据源")
+        
+        st.markdown("---")
+        st.subheader("📁 缓存管理")
+        
+        supabase_data = load_from_supabase()
+        if supabase_data:
+            st.info(f"Supabase缓存中有 {len(supabase_data)} 期数据")
+            if st.button("🗑️ 清空缓存", type="secondary"):
                 supabase = init_supabase()
                 if supabase:
-                    try:
-                        supabase.schema('ssq_schema').table('ssq_draws').delete().neq("id", 0).execute()
-                        st.success("数据已清空")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"清空失败: {e}")
+                    supabase.schema('ssq_schema').table('ssq_draws').delete().neq("id", 0).execute()
+                    st.success("缓存已清空")
+                    st.rerun()
+        else:
+            st.info("Supabase缓存为空")
 
-# ==================== 查奖函数 ====================
-def parse_check_draws(text):
-    """解析查奖数据"""
-    lines = text.strip().split('\n')
-    draws = []
-    for line in lines[:5]:
-        parts = line.replace(',', ' ').split()
-        if len(parts) >= 9:
-            try:
-                draws.append({
-                    'period': parts[0],
-                    'reds': [int(parts[i]) for i in range(2, 8)],
-                    'blue': int(parts[8])
-                })
-            except:
-                continue
-    return draws
-
-def calculate_prize_for_bet(bet, draw):
-    """计算单组投注的中奖情况"""
-    red_matches = len(set(bet['reds'][:6]) & set(draw['reds']))
-    blue_match = (bet['blues'][0] == draw['blue']) if bet['blues'] else False
+# ==================== ROI回测功能 ====================
+def backtest_roi(draws: List[Dict], method: str, num_bets: int = 4, lookback: int = 50) -> Dict:
+    """回测指定方法的ROI"""
+    if len(draws) < lookback + 10:
+        return {"roi": 0, "total_cost": 0, "total_prize": 0, "net": 0, "win_rate": 0}
     
-    if red_matches == 6 and blue_match:
-        return "一等奖 (浮动)"
-    elif red_matches == 6:
-        return "二等奖 (浮动)"
-    elif red_matches == 5 and blue_match:
-        return "三等奖 3000元"
-    elif red_matches == 5 or (red_matches == 4 and blue_match):
-        return "四等奖 200元"
-    elif red_matches == 4 or (red_matches == 3 and blue_match):
-        return "五等奖 10元"
-    elif blue_match:
-        return "六等奖 5元"
-    elif red_matches == 3:
-        return "福运奖 5元 (新规)"
-    else:
-        return "未中奖"
+    total_cost = 0
+    total_prize = 0
+    win_count = 0
+    
+    for i in range(lookback, len(draws)):
+        # 使用截至i-1期数据预测第i期
+        historical = draws[:i]
+        actual = draws[i]
+        
+        # 生成投注
+        generator = BetGenerator()
+        bets = generator.generate(method, historical, num_bets)
+        
+        # 计算中奖
+        period_cost = num_bets * 14  # 每组14元
+        period_prize = 0
+        
+        for bet in bets:
+            red_matches = len(set(bet['reds']) & set(actual['reds'])) if actual.get('reds') else 0
+            blue_match = (bet['blue'] == actual.get('blue', 0)) if actual.get('blue') else False
+            
+            if red_matches == 6 and blue_match:
+                period_prize += 5000000
+            elif red_matches == 6:
+                period_prize += 500000
+            elif red_matches == 5 and blue_match:
+                period_prize += 3000
+            elif red_matches == 5 or (red_matches == 4 and blue_match):
+                period_prize += 200
+            elif red_matches == 4 or (red_matches == 3 and blue_match):
+                period_prize += 10
+            elif blue_match:
+                period_prize += 5
+            elif red_matches == 3:
+                period_prize += 5
+        
+        total_cost += period_cost
+        total_prize += period_prize
+        
+        if period_prize > 0:
+            win_count += 1
+    
+    net = total_prize - total_cost
+    roi = (net / total_cost) * 100 if total_cost > 0 else 0
+    win_rate = (win_count / lookback) * 100 if lookback > 0 else 0
+    
+    return {
+        "roi": roi,
+        "total_cost": total_cost,
+        "total_prize": total_prize,
+        "net": net,
+        "win_rate": win_rate,
+        "periods": lookback
+    }
 
-# ==================== 初始化session state ====================
+# ==================== 初始化 ====================
 if 'admin_logged_in' not in st.session_state:
     st.session_state['admin_logged_in'] = False
 if 'show_admin' not in st.session_state:
@@ -694,21 +1358,24 @@ if 'generated_bets' not in st.session_state:
     st.session_state['generated_bets'] = None
 if 'model_used' not in st.session_state:
     st.session_state['model_used'] = None
+if 'data_manager' not in st.session_state:
+    st.session_state['data_manager'] = DataSourceManager()
+
+data_manager = st.session_state['data_manager']
 
 # ==================== 主页面 ====================
 
-# 右上角齿轮图标
+# 右上角齿轮
 col_title, col_settings = st.columns([0.95, 0.05])
 with col_settings:
     if st.button("⚙️", key="settings_icon", help="管理员设置"):
         st.session_state['show_admin'] = not st.session_state.get('show_admin', False)
 
-# 管理员页面
 if st.session_state.get('show_admin', False):
     if not st.session_state['admin_logged_in']:
         admin_login()
     else:
-        show_admin_page()
+        show_admin_page(data_manager)
         admin_logout()
 
 # ==================== 侧边栏 ====================
@@ -716,27 +1383,31 @@ with st.sidebar:
     st.title("🎰 双色球AI分析工具")
     st.markdown("---")
     
+    # ML库状态
     with st.expander("🤖 ML库状态", expanded=True):
         col1, col2 = st.columns(2)
         with col1:
-            if GETSSQ_AVAILABLE:
-                st.success("✅ getssq")
-            else:
-                st.error("❌ getssq")
-            if LGB_AVAILABLE:
-                st.success("✅ LightGBM")
-            else:
-                st.error("❌ LightGBM")
+            st.success("✅ Python 3.11")
+            st.success("✅ LightGBM") if LGB_AVAILABLE else st.error("❌ LightGBM")
         with col2:
-            if XGB_AVAILABLE:
-                st.success("✅ XGBoost")
-            else:
-                st.error("❌ XGBoost")
-            if SKLEARN_AVAILABLE:
-                st.success("✅ sklearn")
-            else:
-                st.error("❌ sklearn")
+            st.success("✅ XGBoost") if XGB_AVAILABLE else st.error("❌ XGBoost")
+            st.success("✅ scikit-learn") if SKLEARN_AVAILABLE else st.error("❌ scikit-learn")
+        st.caption(f"MCP服务: {'✅ 可用' if MCP_AVAILABLE else '❌ 不可用'}")
     
+    # 数据源状态
+    with st.expander("📡 数据源状态", expanded=True):
+        status_df = data_manager.get_status_df()
+        st.dataframe(status_df, use_container_width=True, hide_index=True)
+        
+        if st.button("🔄 立即获取数据", key="sidebar_sync"):
+            with st.spinner("正在获取数据..."):
+                if data_manager.fetch_all():
+                    st.success(f"来源：{data_manager.get_source_used()}")
+                    st.rerun()
+                else:
+                    st.error("获取失败")
+    
+    # 四种算法对比
     with st.expander("📖 四种AI算法对比"):
         st.markdown("""
         | 算法 | 特点 | 预期ROI |
@@ -747,92 +1418,87 @@ with st.sidebar:
         | 🟣 方法4:XGBoost+NN | 集成深度学习 | **+203%** |
         """)
     
+    # 奖金结构
     with st.expander("💰 奖金结构（7+1复式）"):
         st.markdown("""
-        | 条件 | 单注奖金 | 7+1总奖金 |
-        |------|----------|-----------|
-        | 中蓝球 | 5元 | 35元 (保本) |
-        | 中3红 | 5元 (福运奖) | 35元 |
-        | 中3+1 | 10元 | 70元 |
-        | 中4+0 | 10元 | 70元 |
-        | 中4+1 | 200元 | 200-400元 |
-        | 中5+0 | 200-300元 | 浮动 |
-        | 中5+1 | 3000元 | 3000-9000元 |
+        | 条件 | 7+1总奖金 |
+        |------|-----------|
+        | 中蓝球 | 35元 |
+        | 中3红 | 35元 (福运奖) |
+        | 中3+1 | 70元 |
+        | 中4+0 | 70元 |
+        | 中4+1 | 200-400元 |
+        | 中5+0 | 200-300元 |
+        | 中5+1 | 3000-9000元 |
         """)
     
     st.markdown("---")
-    st.caption("DFSS智能选号工具 v2.0")
+    st.caption("DFSS智能选号工具 v4.0 | 完整版")
 
-# ==================== 主内容 ====================
+# ==================== 加载数据 ====================
+# 尝试从Supabase加载，如果失败则从数据源获取
+draws = load_from_supabase()
+if not draws or len(draws) < 10:
+    with st.spinner("正在获取历史数据..."):
+        if data_manager.fetch_all(limit=300):
+            draws = data_manager.get_data()
+            if draws:
+                save_draws_to_supabase(draws)
 
-# 加载数据
-@st.cache_data(ttl=300, show_spinner="从云端加载数据...")
-def get_draws_from_cloud():
-    return load_draws_from_supabase()
-
-draws = get_draws_from_cloud()
-
-if draws is None or len(draws) == 0:
+if not draws or len(draws) < 10:
     st.info("👈 请点击右上角齿轮图标，进入管理员页面同步数据")
     st.stop()
 
-# 标题和实时奖池
-latest_draw = draws[-1]
-ml_signals = calculate_ml_signals(draws)
-
-col_title, col_pool, col_signal = st.columns([2, 1, 1])
-with col_title:
-    st.title("🎯 双色球AI智能选号")
-with col_pool:
-    pool = ml_signals.get('pool', 0)
-    delta_text = ""
-    if len(draws) > 1:
-        prev_pool = draws[-2].get('pool_amount', 0)
-        delta = (pool - prev_pool) / 1e6
-        delta_text = f"+{delta:.0f}万" if delta >= 0 else f"{delta:.0f}万"
-    st.metric("🏦 实时奖池", f"¥{pool/1e8:.1f}亿", delta=delta_text if delta_text else None)
-with col_signal:
-    signal_level = ml_signals.get('scissors', 'NORMAL')
-    if "HIGH" in signal_level:
-        st.markdown('<div class="signal-high">🔔 强烈推荐投注</div>', unsafe_allow_html=True)
-    elif "MEDIUM" in signal_level:
-        st.markdown('<div class="signal-medium">⚠️ 谨慎投注</div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="signal-low">💤 建议观望</div>', unsafe_allow_html=True)
+# ==================== 主内容 ====================
+st.title("🎯 双色球AI智能选号")
+st.caption(f"📊 当前数据源：{data_manager.get_source_used()} | 共 {len(draws)} 期历史数据 | 最后更新：{data_manager.last_update.strftime('%Y-%m-%d %H:%M') if data_manager.last_update else '未知'}")
 
 st.markdown("---")
 
-# ==================== ML决策引擎区域 ====================
+# ==================== AI决策引擎 ====================
 st.subheader("🧠 AI决策引擎分析")
 
+ml_signals = calculate_ml_signals(draws)
+
+col1, col2, col3, col4, col5 = st.columns(5)
+with col1:
+    red_scores = Method1HotColdSum(draws).calculate_red_scores()
+    top_red = sorted(red_scores.items(), key=lambda x: x[1], reverse=True)[:3]
+    st.metric("🔥 红球热号", ", ".join([str(r[0]) for r in top_red]))
+with col2:
+    blue_scores = Method1HotColdSum(draws).calculate_blue_scores()
+    top_blue = sorted(blue_scores.items(), key=lambda x: x[1], reverse=True)[:3]
+    st.metric("💙 蓝球热号", ", ".join([str(b[0]) for b in top_blue]))
+with col3:
+    target_sum, _ = Method1HotColdSum(draws).get_target_sum()
+    st.metric("📊 目标和值", f"{target_sum} ± {RED_SUM_STD}")
+with col4:
+    st.metric("📈 信号强度", f"{ml_signals['signal_strength']}%")
+with col5:
+    st.metric("🎯 建议", ml_signals['suggestion_text'][:6])
+
+# 详细信号
 col1, col2, col3, col4 = st.columns(4)
 with col1:
-    st.metric("奖池阈值", ml_signals.get('jackpot_level', 'N/A'))
+    st.info(f"**奖池阈值**\n{ml_signals['jackpot_level']}")
 with col2:
-    scissor_text = ml_signals.get('scissors', 'NORMAL').split()[0] if ml_signals.get('scissors') else 'NORMAL'
-    st.metric("剪刀差信号", scissor_text)
+    st.info(f"**剪刀差信号**\n{ml_signals['scissors']}")
 with col3:
-    st.metric("头奖周期", ml_signals.get('cycle', 'N/A'))
+    st.info(f"**头奖周期**\n{ml_signals['cycle']}")
 with col4:
-    st.metric("蓝球偏向", ml_signals.get('blue_bias', 'N/A'))
+    st.info(f"**蓝球偏向**\n{ml_signals['blue_bias']}")
 
 st.markdown("---")
 
-# ==================== AI投注建议区域 ====================
+# ==================== DeepSeek AI建议 ====================
 st.subheader("💡 智能投注建议")
-
-ai_suggestion = get_deepseek_suggestion(
-    ml_signals.get('pool', 0),
-    ml_signals.get('sales', 0),
-    datetime.now().strftime('%A'),
-    ml_signals
-)
+ai_suggestion = get_deepseek_suggestion(draws, data_manager.get_source_used(), ml_signals)
 
 with st.container():
     st.markdown(f"""
     <div class="ai-suggestion-box">
         <h4>🤖 DeepSeek AI 分析</h4>
-        <p><strong>📊 {ai_suggestion.get('summary', '根据ML信号，本期适合标准投注策略')}</strong></p>
+        <p><strong>📊 {ai_suggestion.get('summary', '基于历史数据分析，本期适合标准投注策略')}</strong></p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -840,13 +1506,13 @@ with st.container():
     with col_rec1:
         st.info(f"📈 **建议方案**\n\n{ai_suggestion.get('plan', '4组7+1复式')}")
     with col_rec2:
-        st.warning(f"🎯 **预期赢率**\n\n{ai_suggestion.get('win_rate', '32-35%')}")
+        st.warning(f"🎯 **预期赢率**\n\n{ai_suggestion.get('win_rate', '30-35%')}")
     with col_rec3:
         st.success(f"💰 **最优蓝球**\n\n{ai_suggestion.get('blue_advice', '侧重小号1-8')}")
 
 st.markdown("---")
 
-# ==================== 投注生成区域 ====================
+# ==================== 投注生成 ====================
 st.subheader("🎲 生成AI投注")
 
 col1, col2, col3 = st.columns(3)
@@ -857,92 +1523,132 @@ with col2:
 with col3:
     ai_model = st.selectbox(
         "AI模型",
-        ["方法4: XGBoost+NN ⭐推荐", "方法3: LightGBM", "方法2: 胆拖混合", "方法1: 当前方法"],
+        ["方法4: XGBoost+NN集成 ⭐推荐", "方法3: LightGBM", "方法2: 胆拖混合", "方法1: 当前方法"],
         key="ai_model"
     )
 
-# 解析复式类型
-if bet_type == "7+1 (14元)":
-    num_red, num_blue = 6, 1
-elif bet_type == "7+2 (28元)":
-    num_red, num_blue = 6, 2
-else:
-    num_red, num_blue = 6, 1
-
 if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
     with st.spinner(f"正在使用 {ai_model} 生成投注..."):
-        if "方法1" in ai_model:
-            bets = generate_bets_method1(draws, num_bets, num_red, num_blue)
-            model_used = "当前方法"
-        elif "方法2" in ai_model:
-            bets = generate_bets_method2(draws, num_bets, num_red, num_blue)
-            model_used = "胆拖混合"
-        elif "方法3" in ai_model:
-            bets = generate_bets_method3(draws, num_bets, num_red, num_blue)
-            model_used = "LightGBM"
-        else:
-            bets = generate_bets_method4(draws, num_bets, num_red, num_blue)
-            model_used = "XGBoost+NN集成"
-    
-    st.session_state['generated_bets'] = bets
-    st.session_state['model_used'] = model_used
-    st.success(f"✅ 使用 {model_used} 生成 {len(bets)} 组投注")
+        # 提取方法名称
+        method_name = ai_model.split(":")[0] if ":" in ai_model else ai_model
+        bets = BetGenerator.generate(method_name, draws, num_bets)
+        st.session_state['generated_bets'] = bets
+        st.session_state['model_used'] = ai_model
+    st.success(f"✅ 使用 {ai_model} 生成 {len(bets)} 组投注")
 
 # 显示生成的投注
-if st.session_state['generated_bets'] is not None:
+if st.session_state['generated_bets']:
     bets = st.session_state['generated_bets']
-    model_used = st.session_state.get('model_used', '未知模型')
+    model_used = st.session_state.get('model_used', '未知')
     
     st.markdown(f"### 📝 推荐投注组合 - {model_used}")
-    st.caption(f"{bet_type}复式，每组成本{bet_type.split('(')[1] if '(' in bet_type else '14元'}")
     
-    bets_data = []
-    for i, bet in enumerate(bets, 1):
-        reds_display = ' '.join(f"{n:02d}" for n in bet['reds'])
-        blues_display = ' '.join(f"{n:02d}" for n in bet['blues'])
-        bets_data.append({
-            '组别': i,
-            '红球(6个)': reds_display,
-            '蓝球': blues_display,
-            '和值': bet['sum']
-        })
+    # 用卡片形式显示
+    cols = st.columns(min(num_bets, 4))
+    for i, bet in enumerate(bets):
+        col_idx = i % 4
+        with cols[col_idx]:
+            red_html = " ".join([f'<span class="red-ball">{r:02d}</span>' for r in bet['reds']])
+            blue_html = f'<span class="blue-ball">{bet["blue"]:02d}</span>'
+            st.markdown(f"""
+            <div class="bet-card">
+                <strong>第{i+1}组</strong><br>
+                {red_html}<br>
+                {blue_html}<br>
+                <small>和值: {bet['sum']}</small>
+            </div>
+            """, unsafe_allow_html=True)
     
-    st.dataframe(pd.DataFrame(bets_data), use_container_width=True, hide_index=True)
+    # 表格备用显示
+    with st.expander("📋 查看详细表格"):
+        bets_data = []
+        for i, bet in enumerate(bets, 1):
+            bets_data.append({
+                '组别': i,
+                '红球': ' '.join(f"{r:02d}" for r in bet['reds']),
+                '蓝球': f"{bet['blue']:02d}",
+                '和值': bet['sum']
+            })
+        st.dataframe(pd.DataFrame(bets_data), use_container_width=True, hide_index=True)
     
     st.info(f"💬 **AI解读**：{ai_suggestion.get('summary', '祝您好运！')}")
 
 st.markdown("---")
 
-# ==================== 多期查奖区域 ====================
-st.subheader("🔍 多期查奖")
-st.caption("📌 粘贴实际开奖数据，查看投注中奖情况")
+# ==================== ROI回测 ====================
+with st.expander("📈 ROI回测分析"):
+    st.markdown("基于历史数据的回测分析（仅供参考）")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        backtest_periods = st.slider("回测期数", min_value=20, max_value=min(200, len(draws)-10), value=min(100, len(draws)-10), key="backtest_periods")
+    with col2:
+        backtest_bets = st.number_input("每期组数", min_value=1, max_value=10, value=4, key="backtest_bets")
+    
+    if st.button("运行回测", key="backtest_btn"):
+        with st.spinner("正在回测..."):
+            # 测试四种方法
+            results = []
+            for method in ["方法1: 当前方法", "方法2: 胆拖混合", "方法3: LightGBM", "方法4: XGBoost+NN集成"]:
+                method_name = method.split(":")[0] if ":" in method else method
+                result = backtest_roi(draws, method_name, backtest_bets, backtest_periods)
+                results.append({
+                    "方法": method,
+                    "ROI": f"{result['roi']:.1f}%",
+                    "总成本": f"¥{result['total_cost']:,.0f}",
+                    "总奖金": f"¥{result['total_prize']:,.0f}",
+                    "净收益": f"¥{result['net']:,.0f}",
+                    "中奖率": f"{result['win_rate']:.1f}%"
+                })
+            
+            st.dataframe(pd.DataFrame(results), use_container_width=True, hide_index=True)
+            st.caption(f"回测期间：最近{backtest_periods}期 | 每组成本14元")
 
-check_draws_text = st.text_area(
+st.markdown("---")
+
+# ==================== 多期查奖 ====================
+st.subheader("🔍 多期查奖")
+
+check_text = st.text_area(
     "📋 粘贴开奖数据（最多5期）",
-    height=120,
+    height=100,
     key="check_draws",
-    placeholder="示例:\n26050 2026-05-03 03 04 14 15 18 20 02\n26049 2026-05-01 09 15 18 24 28 33 01"
+    placeholder="格式: 期号 日期 红1 红2 红3 红4 红5 红6 蓝\n示例:\n2026050 2026-05-03 03 04 14 15 18 20 02"
 )
 
-if st.button("🔍 查奖", key="check_btn") and check_draws_text:
-    check_draws = parse_check_draws(check_draws_text)
+if st.button("🔍 查奖", key="check_btn") and check_text:
+    check_draws = parse_check_draws(check_text)
     if check_draws:
         st.success(f"✅ 成功解析 {len(check_draws)} 期数据")
         
         if st.session_state.get('generated_bets'):
-            enhanced_data = []
+            results = []
             for i, bet in enumerate(st.session_state['generated_bets'], 1):
-                row = {'组别': i, '红球': ','.join(f"{n:02d}" for n in bet['reds']), '蓝球': ','.join(f"{n:02d}" for n in bet['blues'])}
+                row = {'组别': i, '红球': ' '.join(f"{n:02d}" for n in bet['reds']), '蓝球': f"{bet['blue']:02d}"}
                 for draw in check_draws:
-                    result = calculate_prize_for_bet(bet, draw)
-                    row[f'{draw["period"]}'] = result
-                enhanced_data.append(row)
-            st.dataframe(pd.DataFrame(enhanced_data), use_container_width=True, hide_index=True)
+                    row[f'{draw["period"]}'] = calculate_prize(bet, draw)
+                results.append(row)
+            
+            st.dataframe(pd.DataFrame(results), use_container_width=True, hide_index=True)
+            
+            # 汇总统计
+            st.markdown("**📊 中奖统计**")
+            all_prizes = []
+            for bet in st.session_state['generated_bets']:
+                for draw in check_draws:
+                    prize = calculate_prize(bet, draw)
+                    if "未中奖" not in prize:
+                        all_prizes.append(prize)
+            
+            if all_prizes:
+                st.success(f"共中奖 {len(all_prizes)} 注，详见上表")
+            else:
+                st.info("本期未中奖")
         else:
             st.warning("请先生成投注组合")
     else:
         st.error("解析失败，请检查格式")
 
-# ==================== 底部风险提示 ====================
+# ==================== 底部 ====================
 st.markdown("---")
-st.caption("⚠️ 本工具仅供学术研究和娱乐参考。双色球本质随机，历史规律不代表未来结果。2026年新规下中3红有福运奖5元。请理性投注，量力而行。")
+st.caption("⚠️ 本工具仅供学术研究和娱乐参考。双色球本质随机，历史规律不代表未来结果。请理性投注，量力而行。")
