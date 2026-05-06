@@ -1,8 +1,9 @@
 # app.py
-# 双色球AI智能选号工具 - 最终完整版
-# 功能：四种AI算法、MCP+爬虫双数据源、Supabase存储、DeepSeek集成、管理员功能、ROI回测、多期查奖
-# 版本：v6.0 FINAL
+# 双色球AI智能选号工具 - 完整版
+# 功能：四种AI算法、MCP+爬虫+Supabase+Excel四数据源、DeepSeek集成、管理员功能、ROI回测、多期查奖
+# 版本：v7.0 FINAL
 # Python版本：3.11
+# 代码行数：约2050行
 
 import streamlit as st
 import pandas as pd
@@ -23,6 +24,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from supabase import create_client, Client
 from retryflow import retry
+import io
 
 warnings.filterwarnings('ignore')
 
@@ -82,18 +84,6 @@ st.markdown("""
         color: white;
         margin: 10px 0;
     }
-    .data-source-status {
-        font-size: 0.8rem;
-        padding: 5px 10px;
-        border-radius: 15px;
-        margin: 2px 0;
-    }
-    .status-success { background-color: #28a745; color: white; }
-    .status-error { background-color: #dc3545; color: white; }
-    .status-warning { background-color: #ffc107; color: #333; }
-    .signal-high { background-color: #ff4b4b; color: white; padding: 5px 10px; border-radius: 20px; display: inline-block; }
-    .signal-medium { background-color: #ffa500; color: white; padding: 5px 10px; border-radius: 20px; display: inline-block; }
-    .signal-low { background-color: #00cc66; color: white; padding: 5px 10px; border-radius: 20px; display: inline-block; }
     .bet-card {
         background-color: #f0f2f6;
         border-radius: 10px;
@@ -125,6 +115,27 @@ st.markdown("""
         margin: 2px;
         font-weight: bold;
     }
+    .signal-high {
+        background-color: #ff4b4b;
+        color: white;
+        padding: 5px 10px;
+        border-radius: 20px;
+        display: inline-block;
+    }
+    .signal-medium {
+        background-color: #ffa500;
+        color: white;
+        padding: 5px 10px;
+        border-radius: 20px;
+        display: inline-block;
+    }
+    .signal-low {
+        background-color: #00cc66;
+        color: white;
+        padding: 5px 10px;
+        border-radius: 20px;
+        display: inline-block;
+    }
     .stButton button {
         width: 100%;
     }
@@ -142,19 +153,6 @@ RED_EXPECTED_SUM = 102
 RED_SUM_STD = 15
 BLUE_EXPECTED = 8.5
 
-# 奖金常量
-PRIZE_LEVELS = {
-    "first": {"name": "一等奖", "amount": 5000000, "condition": (6, True)},
-    "second": {"name": "二等奖", "amount": 500000, "condition": (6, False)},
-    "third": {"name": "三等奖", "amount": 3000, "condition": (5, True)},
-    "fourth": {"name": "四等奖", "amount": 200, "condition": (5, False)},
-    "fourth_b": {"name": "四等奖", "amount": 200, "condition": (4, True)},
-    "fifth": {"name": "五等奖", "amount": 10, "condition": (4, False)},
-    "fifth_b": {"name": "五等奖", "amount": 10, "condition": (3, True)},
-    "sixth": {"name": "六等奖", "amount": 5, "condition": (0, True)},
-    "fuyun": {"name": "福运奖", "amount": 5, "condition": (3, False)}
-}
-
 # ==================== DeepSeek 配置 ====================
 DEEPSEEK_API_KEY = st.secrets.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = st.secrets.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
@@ -168,7 +166,6 @@ def init_supabase():
         supabase_key = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
         return create_client(supabase_url, supabase_key)
     except Exception as e:
-        st.error(f"Supabase连接失败: {e}")
         return None
 
 # ==================== 数据源1：MCP服务 ====================
@@ -187,7 +184,6 @@ def fetch_from_mcp(limit: int = 200) -> Optional[List[Dict]]:
                 if isinstance(reds, str):
                     reds = [int(r) for r in reds.split(',')]
                 
-                # 确保红球有6个
                 if len(reds) < 6:
                     continue
                 
@@ -205,7 +201,7 @@ def fetch_from_mcp(limit: int = 200) -> Optional[List[Dict]]:
                 })
             return adapted
         return None
-    except Exception as e:
+    except Exception:
         return None
 
 # ==================== 数据源2：中彩网爬虫 ====================
@@ -290,7 +286,7 @@ def fetch_from_zhcw(page: int = 1) -> Optional[List[Dict]]:
                     'prize1_amount': 0,
                     'prize2_amount': 0
                 })
-            except Exception as e:
+            except Exception:
                 continue
         
         return draws if draws else None
@@ -299,87 +295,104 @@ def fetch_from_zhcw(page: int = 1) -> Optional[List[Dict]]:
     except Exception:
         return None
 
-# ==================== 数据源管理器 ====================
-class DataSourceManager:
-    """管理多个数据源，支持优先级和切换"""
-    
-    def __init__(self):
-        self.sources = {
-            'mcp': {'name': 'MCP服务', 'enabled': True, 'priority': 1, 'status': '待检测', 'last_error': None},
-            'zhcw': {'name': '中彩网', 'enabled': True, 'priority': 2, 'status': '待检测', 'last_error': None}
-        }
-        self.data = None
-        self.source_used = None
-        self.last_update = None
-    
-    def set_enabled(self, source_key: str, enabled: bool):
-        if source_key in self.sources:
-            self.sources[source_key]['enabled'] = enabled
-    
-    def fetch_all(self, limit: int = 200) -> bool:
-        """按优先级尝试所有启用的数据源"""
-        sorted_sources = sorted(
-            [(k, v) for k, v in self.sources.items() if v['enabled']],
-            key=lambda x: x[1]['priority']
-        )
+# ==================== 数据源3：Excel解析器 ====================
+def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
+    """解析用户上传的Excel文件"""
+    try:
+        df = pd.read_excel(uploaded_file, sheet_name=0)
         
-        for source_key, source_info in sorted_sources:
-            with st.spinner(f"正在从 {source_info['name']} 获取数据..."):
+        draws = []
+        
+        # 检测列名格式
+        if '期号' in df.columns or 'period' in df.columns:
+            period_col = '期号' if '期号' in df.columns else 'period'
+            date_col = '开奖日期' if '开奖日期' in df.columns else 'date'
+            
+            for idx, row in df.iterrows():
                 try:
-                    if source_key == 'mcp':
-                        data = fetch_from_mcp(limit=limit)
-                    elif source_key == 'zhcw':
-                        all_data = []
-                        for page in range(1, 4):
-                            page_data = fetch_from_zhcw(page=page)
-                            if page_data:
-                                all_data.extend(page_data)
-                            time.sleep(0.5)
-                        data = all_data
-                    else:
-                        continue
+                    period = str(row.get(period_col, ''))
+                    date = row.get(date_col)
+                    if isinstance(date, datetime):
+                        date = date.strftime('%Y-%m-%d')
                     
-                    if data and len(data) > 0:
-                        seen = set()
-                        unique_data = []
-                        for d in data:
-                            period = d.get('period', '')
-                            if period and period not in seen:
-                                seen.add(period)
-                                unique_data.append(d)
-                        
-                        source_info['status'] = f"成功获取 {len(unique_data)} 期"
-                        source_info['last_error'] = None
-                        self.data = unique_data
-                        self.source_used = source_key
-                        self.last_update = datetime.now()
-                        return True
+                    # 提取红球
+                    reds = []
+                    for i in range(1, 7):
+                        col_name = f'红球号码_{i}' if f'红球号码_{i}' in df.columns else f'red{i}'
+                        if col_name in df.columns:
+                            val = row.get(col_name)
+                            if pd.notna(val):
+                                reds.append(int(val))
+                        else:
+                            col_idx = 2 + (i - 1)
+                            if col_idx < len(row):
+                                val = row.iloc[col_idx]
+                                if pd.notna(val):
+                                    reds.append(int(val))
+                    
+                    # 提取蓝球
+                    blue = None
+                    if '蓝球' in df.columns:
+                        blue = int(row.get('蓝球')) if pd.notna(row.get('蓝球')) else None
+                    elif '蓝球号码' in df.columns:
+                        blue = int(row.get('蓝球号码')) if pd.notna(row.get('蓝球号码')) else None
                     else:
-                        source_info['status'] = "无数据"
-                except Exception as e:
-                    source_info['status'] = "失败"
-                    source_info['last_error'] = str(e)[:100]
+                        if len(row) > 8:
+                            blue = int(row.iloc[8]) if pd.notna(row.iloc[8]) else None
+                    
+                    if len(reds) == 6 and blue:
+                        draws.append({
+                            'period': period,
+                            'date': date,
+                            'reds': reds,
+                            'blue': blue,
+                            'pool': 0,
+                            'sales': 0,
+                            'prize1_count': 0,
+                            'prize2_count': 0,
+                            'prize1_amount': 0,
+                            'prize2_amount': 0
+                        })
+                except Exception:
                     continue
         
-        return False
-    
-    def get_data(self) -> Optional[List[Dict]]:
-        return self.data
-    
-    def get_source_used(self) -> Optional[str]:
-        return self.source_used
-    
-    def get_status_df(self) -> pd.DataFrame:
-        rows = []
-        for k, v in self.sources.items():
-            rows.append({
-                '数据源': v['name'],
-                '状态': v['status'],
-                '启用': '✅' if v['enabled'] else '❌'
-            })
-        return pd.DataFrame(rows)
+        # 备用解析：从您提供的Excel格式解析（红球在C-H列，蓝球在I列）
+        if len(draws) == 0:
+            for idx, row in df.iterrows():
+                try:
+                    reds = []
+                    for i in range(2, 8):
+                        if i < len(row):
+                            val = row.iloc[i]
+                            if pd.notna(val):
+                                reds.append(int(val))
+                    
+                    blue = None
+                    if len(row) > 8:
+                        blue = int(row.iloc[8]) if pd.notna(row.iloc[8]) else None
+                    
+                    if len(reds) == 6 and blue:
+                        period = str(row.iloc[0]) if len(row) > 0 else str(idx + 1)
+                        draws.append({
+                            'period': period,
+                            'date': None,
+                            'reds': reds,
+                            'blue': blue,
+                            'pool': 0,
+                            'sales': 0,
+                            'prize1_count': 0,
+                            'prize2_count': 0,
+                            'prize1_amount': 0,
+                            'prize2_amount': 0
+                        })
+                except Exception:
+                    continue
+        
+        return draws if draws else None
+    except Exception as e:
+        return None
 
-# ==================== Supabase数据操作 ====================
+# ==================== 数据源4：Supabase操作 ====================
 def load_from_supabase(limit: int = 500) -> Optional[List[Dict]]:
     """从Supabase加载数据"""
     supabase = init_supabase()
@@ -403,7 +416,9 @@ def load_from_supabase(limit: int = 500) -> Optional[List[Dict]]:
                     'pool': row.get('pool_amount', 0),
                     'sales': row.get('total_sales', 0),
                     'prize1_count': row.get('prize1_count', 0),
-                    'prize2_count': row.get('prize2_count', 0)
+                    'prize2_count': row.get('prize2_count', 0),
+                    'prize1_amount': row.get('prize1_amount', 0),
+                    'prize2_amount': row.get('prize2_amount', 0)
                 })
             if draws:
                 return draws
@@ -457,6 +472,100 @@ def save_draws_to_supabase(draws: List[Dict]) -> int:
             continue
     
     return 0
+
+# ==================== 数据源管理器 ====================
+class DataSourceManager:
+    """管理多个数据源，支持优先级和自动降级"""
+    
+    def __init__(self):
+        self.sources = {
+            'mcp': {'name': 'MCP服务', 'enabled': True, 'priority': 1, 'status': '待检测', 'last_error': None},
+            'zhcw': {'name': '中彩网', 'enabled': True, 'priority': 2, 'status': '待检测', 'last_error': None},
+            'supabase': {'name': 'Supabase缓存', 'enabled': True, 'priority': 3, 'status': '待检测', 'last_error': None},
+            'excel': {'name': 'Excel导入', 'enabled': True, 'priority': 4, 'status': '待检测', 'last_error': None}
+        }
+        self.data = None
+        self.source_used = None
+        self.last_update = None
+        self.excel_data = None
+    
+    def set_enabled(self, source_key: str, enabled: bool):
+        if source_key in self.sources:
+            self.sources[source_key]['enabled'] = enabled
+    
+    def set_excel_data(self, data: List[Dict]):
+        """设置Excel导入的数据"""
+        self.excel_data = data
+        if data and len(data) > 0:
+            self.sources['excel']['status'] = f"已导入 {len(data)} 期"
+        else:
+            self.sources['excel']['status'] = "待上传"
+    
+    def fetch_all(self, limit: int = 200) -> bool:
+        """按优先级尝试所有启用的数据源，自动降级"""
+        sorted_sources = sorted(
+            [(k, v) for k, v in self.sources.items() if v['enabled']],
+            key=lambda x: x[1]['priority']
+        )
+        
+        for source_key, source_info in sorted_sources:
+            try:
+                if source_key == 'mcp':
+                    data = fetch_from_mcp(limit=limit)
+                elif source_key == 'zhcw':
+                    all_data = []
+                    for page in range(1, 4):
+                        page_data = fetch_from_zhcw(page=page)
+                        if page_data:
+                            all_data.extend(page_data)
+                        time.sleep(0.5)
+                    data = all_data
+                elif source_key == 'supabase':
+                    data = load_from_supabase(limit=limit)
+                elif source_key == 'excel':
+                    data = self.excel_data
+                else:
+                    continue
+                
+                if data and len(data) > 0:
+                    seen = set()
+                    unique_data = []
+                    for d in data:
+                        period = d.get('period', '')
+                        if period and period not in seen:
+                            seen.add(period)
+                            unique_data.append(d)
+                    
+                    source_info['status'] = f"成功获取 {len(unique_data)} 期"
+                    source_info['last_error'] = None
+                    self.data = unique_data
+                    self.source_used = source_key
+                    self.last_update = datetime.now()
+                    return True
+                else:
+                    source_info['status'] = "无数据"
+            except Exception as e:
+                source_info['status'] = "失败"
+                source_info['last_error'] = str(e)[:100]
+                continue
+        
+        return False
+    
+    def get_data(self) -> Optional[List[Dict]]:
+        return self.data
+    
+    def get_source_used(self) -> Optional[str]:
+        return self.source_used
+    
+    def get_status_df(self) -> pd.DataFrame:
+        rows = []
+        for k, v in self.sources.items():
+            rows.append({
+                '数据源': v['name'],
+                '状态': v['status'],
+                '启用': '✅' if v['enabled'] else '❌'
+            })
+        return pd.DataFrame(rows)
 
 # ==================== 方法1：冷热码+和值预测 ====================
 class Method1HotColdSum:
@@ -1267,6 +1376,7 @@ def admin_logout():
         st.rerun()
 
 def show_admin_page(data_manager: DataSourceManager):
+    """管理员页面 - 数据源管理、Excel上传"""
     with st.expander("🔧 管理员控制台", expanded=True):
         st.subheader("📡 数据源状态")
         status_df = data_manager.get_status_df()
@@ -1275,13 +1385,53 @@ def show_admin_page(data_manager: DataSourceManager):
         st.markdown("---")
         st.subheader("🔌 数据源开关")
         
-        col1, col2 = st.columns(2)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             mcp_enabled = st.checkbox("启用MCP服务", value=data_manager.sources['mcp']['enabled'], key="mcp_toggle")
             data_manager.set_enabled('mcp', mcp_enabled)
         with col2:
             zhcw_enabled = st.checkbox("启用中彩网爬虫", value=data_manager.sources['zhcw']['enabled'], key="zhcw_toggle")
             data_manager.set_enabled('zhcw', zhcw_enabled)
+        with col3:
+            supabase_enabled = st.checkbox("启用Supabase缓存", value=data_manager.sources['supabase']['enabled'], key="supabase_toggle")
+            data_manager.set_enabled('supabase', supabase_enabled)
+        with col4:
+            st.checkbox("Excel导入", value=True, disabled=True, key="excel_show")
+        
+        st.markdown("---")
+        st.subheader("📎 Excel数据导入")
+        st.caption("上传您提供的双色球历史数据Excel文件")
+        
+        uploaded_file = st.file_uploader(
+            "选择Excel文件",
+            type=['xlsx', 'xls'],
+            key="admin_excel_upload",
+            help="支持双色球开奖数据_all.xlsx格式"
+        )
+        
+        if uploaded_file is not None:
+            with st.spinner("正在解析Excel文件..."):
+                excel_draws = parse_excel_file(uploaded_file)
+                if excel_draws and len(excel_draws) > 0:
+                    st.success(f"✅ 成功解析 {len(excel_draws)} 期数据")
+                    data_manager.set_excel_data(excel_draws)
+                    
+                    # 预览前10期
+                    preview_df = pd.DataFrame([{
+                        '期号': d['period'],
+                        '红球': ','.join(str(r) for r in d['reds']),
+                        '蓝球': d['blue']
+                    } for d in excel_draws[:10]])
+                    st.dataframe(preview_df, use_container_width=True, hide_index=True)
+                    
+                    if st.button("💾 保存Excel数据到Supabase", key="save_excel_to_supabase"):
+                        new_count = save_draws_to_supabase(excel_draws)
+                        if new_count > 0:
+                            st.success(f"已保存 {new_count} 期新数据到Supabase")
+                        else:
+                            st.info("Supabase中已有这些数据")
+                else:
+                    st.error("解析失败，请检查文件格式")
         
         st.markdown("---")
         st.subheader("🔄 数据同步")
@@ -1304,7 +1454,7 @@ def show_admin_page(data_manager: DataSourceManager):
                         st.error("所有数据源均获取失败")
         
         with col2:
-            st.caption("系统会按优先级自动切换数据源")
+            st.caption("优先级：MCP > 中彩网 > Supabase > Excel")
         
         st.markdown("---")
         st.subheader("📁 缓存管理")
@@ -1359,6 +1509,7 @@ with st.sidebar:
     st.title("🎰 双色球AI分析工具")
     st.markdown("---")
     
+    # ML库状态
     with st.expander("🤖 ML库状态", expanded=True):
         col1, col2 = st.columns(2)
         with col1:
@@ -1369,6 +1520,7 @@ with st.sidebar:
             st.success("✅ scikit-learn") if SKLEARN_AVAILABLE else st.error("❌ scikit-learn")
         st.caption(f"MCP服务: {'✅ 可用' if MCP_AVAILABLE else '❌ 不可用'}")
     
+    # 数据源状态
     with st.expander("📡 数据源状态", expanded=True):
         status_df = data_manager.get_status_df()
         st.dataframe(status_df, use_container_width=True, hide_index=True)
@@ -1381,6 +1533,7 @@ with st.sidebar:
                 else:
                     st.error("获取失败")
     
+    # 四种算法对比
     with st.expander("📖 四种AI算法对比"):
         st.markdown("""
         | 算法 | 特点 | 预期ROI |
@@ -1391,6 +1544,7 @@ with st.sidebar:
         | 🟣 方法4:XGBoost+NN | 集成深度学习 | **+203%** |
         """)
     
+    # 奖金结构
     with st.expander("💰 奖金结构（7+1复式）"):
         st.markdown("""
         | 条件 | 7+1总奖金 |
@@ -1405,7 +1559,7 @@ with st.sidebar:
         """)
     
     st.markdown("---")
-    st.caption("DFSS智能选号工具 v6.0 Final | 完整版")
+    st.caption("DFSS智能选号工具 v7.0 Final")
 
 # ==================== 加载数据 ====================
 draws = load_from_supabase()
@@ -1418,7 +1572,7 @@ if not draws or len(draws) < 10:
                 save_draws_to_supabase(draws)
 
 if not draws or len(draws) < 10:
-    st.info("👈 请点击右上角齿轮图标，进入管理员页面同步数据")
+    st.info("👈 请点击右上角齿轮图标，进入管理员页面上传Excel文件或同步数据")
     st.stop()
 
 # ==================== 主内容 ====================
