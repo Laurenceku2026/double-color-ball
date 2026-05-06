@@ -9,4 +9,4 @@ scikit-learn>=1.3.0
 requests>=2.31.0
 lxml>=4.9.0
 retryflow>=0.1.0
-git+https://github.com/RusianHu/F0ckssq-mcp.git   # MCP服务
+git+https://github.com/RusianHu/F0ckssq-mcp.git
