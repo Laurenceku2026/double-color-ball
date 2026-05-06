@@ -1,9 +1,8 @@
-# app.py
+# app.py - 第一部分
 # 双色球AI智能选号工具 - 完整版
-# 功能：四种AI算法、MCP+爬虫+Supabase+Excel四数据源、DeepSeek集成、管理员功能、ROI回测、多期查奖
-# 版本：v7.0 FINAL
+# 功能：数据概览、冷热码分析、和值趋势、蓝球走势、AI决策、投注生成、ROI回测、多期查奖
+# 版本：v8.0 FINAL
 # Python版本：3.11
-# 代码行数：约2050行
 
 import streamlit as st
 import pandas as pd
@@ -24,7 +23,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 from supabase import create_client, Client
 from retryflow import retry
-import io
 
 warnings.filterwarnings('ignore')
 
@@ -84,6 +82,13 @@ st.markdown("""
         color: white;
         margin: 10px 0;
     }
+    .ml-tip-box {
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        border-radius: 10px;
+        padding: 15px;
+        color: white;
+        margin: 10px 0;
+    }
     .bet-card {
         background-color: #f0f2f6;
         border-radius: 10px;
@@ -115,34 +120,13 @@ st.markdown("""
         margin: 2px;
         font-weight: bold;
     }
-    .signal-high {
-        background-color: #ff4b4b;
-        color: white;
-        padding: 5px 10px;
-        border-radius: 20px;
-        display: inline-block;
-    }
-    .signal-medium {
-        background-color: #ffa500;
-        color: white;
-        padding: 5px 10px;
-        border-radius: 20px;
-        display: inline-block;
-    }
-    .signal-low {
-        background-color: #00cc66;
-        color: white;
-        padding: 5px 10px;
-        border-radius: 20px;
-        display: inline-block;
-    }
-    .stButton button {
-        width: 100%;
-    }
-    div[data-testid="stExpander"] div[role="button"] p {
-        font-size: 1.1rem;
-        font-weight: bold;
-    }
+    .zone-hot { background-color: #ff6b6b; color: white; padding: 4px 8px; border-radius: 15px; display: inline-block; margin: 2px; }
+    .zone-cold { background-color: #4d4d4d; color: white; padding: 4px 8px; border-radius: 15px; display: inline-block; margin: 2px; }
+    .signal-high { background-color: #ff4b4b; color: white; padding: 5px 10px; border-radius: 20px; display: inline-block; }
+    .signal-medium { background-color: #ffa500; color: white; padding: 5px 10px; border-radius: 20px; display: inline-block; }
+    .signal-low { background-color: #00cc66; color: white; padding: 5px 10px; border-radius: 20px; display: inline-block; }
+    .stButton button { width: 100%; }
+    div[data-testid="stExpander"] div[role="button"] p { font-size: 1.1rem; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -151,7 +135,17 @@ RED_NUMBERS = list(range(1, 34))
 BLUE_NUMBERS = list(range(1, 17))
 RED_EXPECTED_SUM = 102
 RED_SUM_STD = 15
-BLUE_EXPECTED = 8.5
+
+# 7分区定义
+ZONES = {
+    1: {'name': 'A区', 'range': '01-05', 'numbers': [1, 2, 3, 4, 5]},
+    2: {'name': 'B区', 'range': '06-10', 'numbers': [6, 7, 8, 9, 10]},
+    3: {'name': 'C区', 'range': '11-15', 'numbers': [11, 12, 13, 14, 15]},
+    4: {'name': 'D区', 'range': '16-20', 'numbers': [16, 17, 18, 19, 20]},
+    5: {'name': 'E区', 'range': '21-25', 'numbers': [21, 22, 23, 24, 25]},
+    6: {'name': 'F区', 'range': '26-30', 'numbers': [26, 27, 28, 29, 30]},
+    7: {'name': 'G区', 'range': '31-33', 'numbers': [31, 32, 33]}
+}
 
 # ==================== DeepSeek 配置 ====================
 DEEPSEEK_API_KEY = st.secrets.get("DEEPSEEK_API_KEY", "")
@@ -165,7 +159,7 @@ def init_supabase():
         supabase_url = st.secrets["SUPABASE_URL"]
         supabase_key = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
         return create_client(supabase_url, supabase_key)
-    except Exception as e:
+    except Exception:
         return None
 
 # ==================== 数据源1：MCP服务 ====================
@@ -290,8 +284,6 @@ def fetch_from_zhcw(page: int = 1) -> Optional[List[Dict]]:
                 continue
         
         return draws if draws else None
-    except requests.exceptions.ConnectionError:
-        return None
     except Exception:
         return None
 
@@ -300,22 +292,25 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
     """解析用户上传的Excel文件"""
     try:
         df = pd.read_excel(uploaded_file, sheet_name=0)
-        
         draws = []
         
-        # 检测列名格式
-        if '期号' in df.columns or 'period' in df.columns:
-            period_col = '期号' if '期号' in df.columns else 'period'
+        # 检测标准格式（期号、日期、红球6列、蓝球）
+        if '期号' in df.columns:
+            has_standard_format = True
+            period_col = '期号'
             date_col = '开奖日期' if '开奖日期' in df.columns else 'date'
+            blue_col = '蓝球' if '蓝球' in df.columns else 'blue'
             
             for idx, row in df.iterrows():
                 try:
                     period = str(row.get(period_col, ''))
-                    date = row.get(date_col)
-                    if isinstance(date, datetime):
-                        date = date.strftime('%Y-%m-%d')
+                    if period == 'nan' or not period:
+                        continue
                     
-                    # 提取红球
+                    date_val = row.get(date_col)
+                    if isinstance(date_val, datetime):
+                        date_val = date_val.strftime('%Y-%m-%d')
+                    
                     reds = []
                     for i in range(1, 7):
                         col_name = f'红球号码_{i}' if f'红球号码_{i}' in df.columns else f'red{i}'
@@ -323,27 +318,23 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
                             val = row.get(col_name)
                             if pd.notna(val):
                                 reds.append(int(val))
-                        else:
-                            col_idx = 2 + (i - 1)
-                            if col_idx < len(row):
-                                val = row.iloc[col_idx]
-                                if pd.notna(val):
-                                    reds.append(int(val))
                     
-                    # 提取蓝球
+                    if len(reds) != 6:
+                        continue
+                    
                     blue = None
-                    if '蓝球' in df.columns:
-                        blue = int(row.get('蓝球')) if pd.notna(row.get('蓝球')) else None
-                    elif '蓝球号码' in df.columns:
-                        blue = int(row.get('蓝球号码')) if pd.notna(row.get('蓝球号码')) else None
-                    else:
-                        if len(row) > 8:
-                            blue = int(row.iloc[8]) if pd.notna(row.iloc[8]) else None
+                    if blue_col in df.columns:
+                        blue_val = row.get(blue_col)
+                        if pd.notna(blue_val):
+                            blue = int(blue_val)
                     
-                    if len(reds) == 6 and blue:
+                    if blue is None and len(row) > 8:
+                        blue = int(row.iloc[8]) if pd.notna(row.iloc[8]) else None
+                    
+                    if blue:
                         draws.append({
                             'period': period,
-                            'date': date,
+                            'date': date_val,
                             'reds': reds,
                             'blue': blue,
                             'pool': 0,
@@ -356,40 +347,48 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
                 except Exception:
                     continue
         
-        # 备用解析：从您提供的Excel格式解析（红球在C-H列，蓝球在I列）
+        # 备用解析：直接按列索引（红球在C-H列，蓝球在I列）
         if len(draws) == 0:
             for idx, row in df.iterrows():
                 try:
+                    if len(row) < 9:
+                        continue
+                    
                     reds = []
                     for i in range(2, 8):
                         if i < len(row):
                             val = row.iloc[i]
                             if pd.notna(val):
-                                reds.append(int(val))
+                                reds.append(int(float(val)))
                     
-                    blue = None
-                    if len(row) > 8:
-                        blue = int(row.iloc[8]) if pd.notna(row.iloc[8]) else None
+                    if len(reds) != 6:
+                        continue
                     
-                    if len(reds) == 6 and blue:
-                        period = str(row.iloc[0]) if len(row) > 0 else str(idx + 1)
-                        draws.append({
-                            'period': period,
-                            'date': None,
-                            'reds': reds,
-                            'blue': blue,
-                            'pool': 0,
-                            'sales': 0,
-                            'prize1_count': 0,
-                            'prize2_count': 0,
-                            'prize1_amount': 0,
-                            'prize2_amount': 0
-                        })
+                    blue_val = row.iloc[8] if len(row) > 8 else None
+                    if pd.notna(blue_val):
+                        blue = int(float(blue_val))
+                    else:
+                        continue
+                    
+                    period = str(row.iloc[0]) if len(row) > 0 and pd.notna(row.iloc[0]) else str(idx + 1)
+                    
+                    draws.append({
+                        'period': period,
+                        'date': None,
+                        'reds': reds,
+                        'blue': blue,
+                        'pool': 0,
+                        'sales': 0,
+                        'prize1_count': 0,
+                        'prize2_count': 0,
+                        'prize1_amount': 0,
+                        'prize2_amount': 0
+                    })
                 except Exception:
                     continue
         
         return draws if draws else None
-    except Exception as e:
+    except Exception:
         return None
 
 # ==================== 数据源4：Supabase操作 ====================
@@ -494,7 +493,6 @@ class DataSourceManager:
             self.sources[source_key]['enabled'] = enabled
     
     def set_excel_data(self, data: List[Dict]):
-        """设置Excel导入的数据"""
         self.excel_data = data
         if data and len(data) > 0:
             self.sources['excel']['status'] = f"已导入 {len(data)} 期"
@@ -502,7 +500,6 @@ class DataSourceManager:
             self.sources['excel']['status'] = "待上传"
     
     def fetch_all(self, limit: int = 200) -> bool:
-        """按优先级尝试所有启用的数据源，自动降级"""
         sorted_sources = sorted(
             [(k, v) for k, v in self.sources.items() if v['enabled']],
             key=lambda x: x[1]['priority']
@@ -1112,6 +1109,7 @@ class BetGenerator:
 
 # ==================== ML信号计算 ====================
 def calculate_ml_signals(draws: List[Dict]) -> Dict:
+    """计算ML特征信号"""
     if not draws or len(draws) < 10:
         return {
             'jackpot_level': '数据不足',
@@ -1148,10 +1146,10 @@ def calculate_ml_signals(draws: List[Dict]) -> Dict:
             pool_change = (pool - prev_pool) / prev_pool if prev_pool > 0 else 0
             
             if sales_change > 0.05 and pool_change < -0.03:
-                scissors = "HIGH_ALERT"
+                scissors = "HIGH_ALERT (头奖爆发预警)"
                 signal_strength += 40
             elif sales_change > 0.03:
-                scissors = "MEDIUM"
+                scissors = "MEDIUM (投注活跃)"
                 signal_strength += 20
             else:
                 scissors = "NORMAL"
@@ -1203,8 +1201,9 @@ def calculate_ml_signals(draws: List[Dict]) -> Dict:
         'sales': sales
     }
 
-# ==================== DeepSeek AI 建议 ====================
-def get_deepseek_suggestion(draws: List[Dict], source_used: str, ml_signals: Dict) -> Dict:
+# ==================== DeepSeek AI 建议（含ML提示） ====================
+def get_deepseek_suggestion(draws: List[Dict], source_used: str, ml_signals: Dict, next_period: str) -> Dict:
+    """获取DeepSeek AI的投注建议和ML提示"""
     if not DEEPSEEK_API_KEY or len(draws) < 10:
         red_scores = Method1HotColdSum(draws).calculate_red_scores()
         top_reds = sorted(red_scores.items(), key=lambda x: x[1], reverse=True)[:6]
@@ -1213,7 +1212,8 @@ def get_deepseek_suggestion(draws: List[Dict], source_used: str, ml_signals: Dic
             "plan": "4组7+1复式",
             "win_rate": "30-35%",
             "blue_advice": f"推荐蓝球{top_blue[0][0] if top_blue else 8}",
-            "summary": f"基于{len(draws)}期历史数据，红球热号集中在{top_reds[0][0] if top_reds else 1}附近"
+            "summary": f"基于{len(draws)}期历史数据，红球热号集中在{top_reds[0][0] if top_reds else 1}附近",
+            "ml_tip": f"奖池{ml_signals['jackpot_level']}，{ml_signals['cycle']}，建议关注蓝球{ml_signals['blue_bias']}"
         }
     
     red_scores = Method1HotColdSum(draws).calculate_red_scores()
@@ -1223,22 +1223,26 @@ def get_deepseek_suggestion(draws: List[Dict], source_used: str, ml_signals: Dic
     top_blues = sorted(blue_scores.items(), key=lambda x: x[1], reverse=True)[:3]
     
     try:
-        prompt = f"""你是双色球AI分析专家。基于以下数据给出投注建议（JSON格式）：
+        prompt = f"""你是双色球AI分析专家。基于以下数据给出投注建议和ML提示（JSON格式）：
 
 【数据来源】{source_used}
 【历史数据量】{len(draws)}期
+【预测下一期】{next_period}
 【红球热号Top6】{[r[0] for r in top_reds]}
 【蓝球热号Top3】{[b[0] for b in top_blues]}
+【奖池】{ml_signals.get('pool', 0)/1e8:.1f}亿
 【剪刀差信号】{ml_signals.get('scissors', '正常')}
 【奖池阈值】{ml_signals.get('jackpot_level', '正常')}
+【头奖周期】{ml_signals.get('cycle', '正常')}
+【蓝球偏向】{ml_signals.get('blue_bias', '均衡')}
 
-请按此JSON格式回复（只有JSON）：
-{{"plan": "推荐方案(7+1/7+2/观望)", "win_rate": "预期赢率%", "blue_advice": "蓝球建议", "summary": "一句话总结"}}
+请按此JSON格式回复：
+{{"plan": "推荐方案(7+1/7+2/观望)", "win_rate": "预期赢率%", "blue_advice": "蓝球建议", "summary": "一句话总结", "ml_tip": "关于下一期的ML提示（30字以内）"}}
 """
         response = requests.post(
             f"{DEEPSEEK_BASE_URL}/v1/chat/completions",
             headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
-            json={"model": DEEPSEEK_MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.7, "max_tokens": 300},
+            json={"model": DEEPSEEK_MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.7, "max_tokens": 500},
             timeout=10
         )
         
@@ -1254,17 +1258,20 @@ def get_deepseek_suggestion(draws: List[Dict], source_used: str, ml_signals: Dic
         "plan": "4组7+1复式",
         "win_rate": "30-35%",
         "blue_advice": f"推荐蓝球{top_blues[0][0] if top_blues else 8}",
-        "summary": f"基于{len(draws)}期历史数据，红球热号集中在{top_reds[0][0] if top_reds else 1}附近"
+        "summary": f"基于{len(draws)}期历史数据，红球热号集中在{top_reds[0][0] if top_reds else 1}附近",
+        "ml_tip": f"奖池{ml_signals['jackpot_level']}，{ml_signals['cycle']}，建议关注蓝球{ml_signals['blue_bias']}"
     }
 
 # ==================== ROI回测功能 ====================
 def backtest_roi(draws: List[Dict], method: str, num_bets: int = 4, lookback: int = 50) -> Dict:
+    """回测指定方法的ROI"""
     if len(draws) < lookback + 10:
         return {"roi": 0, "total_cost": 0, "total_prize": 0, "net": 0, "win_rate": 0}
     
     total_cost = 0
     total_prize = 0
     win_count = 0
+    prize_breakdown = {"first": 0, "second": 0, "third": 0, "fourth": 0, "fifth": 0, "sixth": 0, "fuyun": 0}
     
     for i in range(lookback, len(draws)):
         historical = draws[:i]
@@ -1281,18 +1288,25 @@ def backtest_roi(draws: List[Dict], method: str, num_bets: int = 4, lookback: in
             
             if red_matches == 6 and blue_match:
                 period_prize += 5000000
+                prize_breakdown["first"] += 1
             elif red_matches == 6:
                 period_prize += 500000
+                prize_breakdown["second"] += 1
             elif red_matches == 5 and blue_match:
                 period_prize += 3000
+                prize_breakdown["third"] += 1
             elif red_matches == 5 or (red_matches == 4 and blue_match):
                 period_prize += 200
+                prize_breakdown["fourth"] += 1
             elif red_matches == 4 or (red_matches == 3 and blue_match):
                 period_prize += 10
+                prize_breakdown["fifth"] += 1
             elif blue_match:
                 period_prize += 5
+                prize_breakdown["sixth"] += 1
             elif red_matches == 3:
                 period_prize += 5
+                prize_breakdown["fuyun"] += 1
         
         total_cost += period_cost
         total_prize += period_prize
@@ -1310,11 +1324,13 @@ def backtest_roi(draws: List[Dict], method: str, num_bets: int = 4, lookback: in
         "total_prize": total_prize,
         "net": net,
         "win_rate": win_rate,
-        "periods": lookback
+        "periods": lookback,
+        "prize_breakdown": prize_breakdown
     }
 
 # ==================== 多期查奖 ====================
 def parse_check_draws(text: str) -> List[Dict]:
+    """解析查奖数据"""
     lines = text.strip().split('\n')
     draws = []
     for line in lines[:5]:
@@ -1331,6 +1347,7 @@ def parse_check_draws(text: str) -> List[Dict]:
     return draws
 
 def calculate_prize(bet: Dict, draw: Dict) -> str:
+    """计算单注中奖"""
     red_matches = len(set(bet['reds']) & set(draw['reds']))
     blue_match = (bet['blue'] == draw['blue'])
     
@@ -1350,6 +1367,164 @@ def calculate_prize(bet: Dict, draw: Dict) -> str:
         return "🎁 福运奖 5元 (新规)"
     else:
         return "❌ 未中奖"
+
+# ==================== 冷热码分析函数 ====================
+def get_hot_cold_analysis(draws: List[Dict], analysis_periods: int = 100):
+    """获取冷热码分析数据"""
+    if len(draws) < analysis_periods:
+        analysis_periods = len(draws)
+    
+    recent_draws = draws[-analysis_periods:]
+    
+    red_freq = {i: 0 for i in range(1, 34)}
+    blue_freq = {i: 0 for i in range(1, 17)}
+    
+    for draw in recent_draws:
+        for num in draw.get('reds', []):
+            if 1 <= num <= 33:
+                red_freq[num] += 1
+        blue = draw.get('blue', 0)
+        if 1 <= blue <= 16:
+            blue_freq[blue] += 1
+    
+    # 计算遗漏期数
+    red_absence = {i: 0 for i in range(1, 34)}
+    blue_absence = {i: 0 for i in range(1, 17)}
+    
+    for num in range(1, 34):
+        last_seen = None
+        for idx, draw in enumerate(reversed(draws)):
+            if num in draw.get('reds', []):
+                last_seen = idx
+                break
+        red_absence[num] = last_seen if last_seen is not None else len(draws)
+    
+    for num in range(1, 17):
+        last_seen = None
+        for idx, draw in enumerate(reversed(draws)):
+            if draw.get('blue', 0) == num:
+                last_seen = idx
+                break
+        blue_absence[num] = last_seen if last_seen is not None else len(draws)
+    
+    # 排序
+    hot_reds = sorted(red_freq.items(), key=lambda x: x[1], reverse=True)[:15]
+    cold_reds = sorted(red_freq.items(), key=lambda x: x[1])[:10]
+    hot_blues = sorted(blue_freq.items(), key=lambda x: x[1], reverse=True)[:8]
+    
+    return {
+        'hot_reds': hot_reds,
+        'cold_reds': cold_reds,
+        'hot_blues': hot_blues,
+        'red_freq': red_freq,
+        'blue_freq': blue_freq,
+        'red_absence': red_absence,
+        'blue_absence': blue_absence,
+        'analysis_periods': analysis_periods
+    }
+
+# ==================== 7分区热度分析 ====================
+def get_zone_heat(draws: List[Dict], analysis_periods: int = 100):
+    """获取7分区热度"""
+    if len(draws) < analysis_periods:
+        analysis_periods = len(draws)
+    
+    recent_draws = draws[-analysis_periods:]
+    
+    zone_hits = {i: 0 for i in range(1, 8)}
+    
+    for draw in recent_draws:
+        for num in draw.get('reds', []):
+            for zone_id, zone_info in ZONES.items():
+                if num in zone_info['numbers']:
+                    zone_hits[zone_id] += 1
+                    break
+    
+    max_hits = max(zone_hits.values()) if zone_hits.values() else 1
+    zone_heat = {}
+    for zone_id, hits in zone_hits.items():
+        normalized = hits / max_hits
+        if normalized >= 0.7:
+            heat_level = "🔥 热"
+        elif normalized >= 0.4:
+            heat_level = "⚡ 中"
+        else:
+            heat_level = "❄️ 冷"
+        zone_heat[zone_id] = {
+            'name': ZONES[zone_id]['name'],
+            'range': ZONES[zone_id]['range'],
+            'hits': hits,
+            'percentage': hits / (len(recent_draws) * 6) * 100,
+            'heat_level': heat_level
+        }
+    
+    return zone_heat
+
+# ==================== 蓝球走势分析 ====================
+def get_blue_trend(draws: List[Dict], analysis_periods: int = 50):
+    """获取蓝球走势数据"""
+    if len(draws) < analysis_periods:
+        analysis_periods = len(draws)
+    
+    recent_draws = draws[-analysis_periods:]
+    
+    blue_sequence = []
+    for draw in recent_draws:
+        blue_sequence.append(draw.get('blue', 0))
+    
+    # 频率统计
+    blue_freq = {i: 0 for i in range(1, 17)}
+    for blue in blue_sequence:
+        if 1 <= blue <= 16:
+            blue_freq[blue] += 1
+    
+    # 遗漏期数
+    blue_absence = {i: 0 for i in range(1, 17)}
+    for num in range(1, 17):
+        last_seen = None
+        for idx, draw in enumerate(reversed(draws)):
+            if draw.get('blue', 0) == num:
+                last_seen = idx
+                break
+        blue_absence[num] = last_seen if last_seen is not None else len(draws)
+    
+    # 大小号比例
+    small_count = sum(1 for b in blue_sequence if 1 <= b <= 8)
+    large_count = sum(1 for b in blue_sequence if 9 <= b <= 16)
+    
+    return {
+        'blue_sequence': blue_sequence,
+        'blue_freq': blue_freq,
+        'blue_absence': blue_absence,
+        'small_count': small_count,
+        'large_count': large_count,
+        'analysis_periods': analysis_periods
+    }
+
+# ==================== 和值走势分析 ====================
+def get_sum_trend(draws: List[Dict], analysis_periods: int = 50):
+    """获取和值走势数据"""
+    if len(draws) < analysis_periods:
+        analysis_periods = len(draws)
+    
+    recent_draws = draws[-analysis_periods:]
+    
+    sums = []
+    periods = []
+    for draw in recent_draws:
+        sums.append(sum(draw.get('reds', [])))
+        periods.append(draw.get('period', ''))
+    
+    mean_sum = np.mean(sums) if sums else RED_EXPECTED_SUM
+    std_sum = np.std(sums) if len(sums) > 1 else RED_SUM_STD
+    
+    return {
+        'sums': sums,
+        'periods': periods,
+        'mean_sum': mean_sum,
+        'std_sum': std_sum,
+        'analysis_periods': analysis_periods
+    }
 
 # ==================== 管理员函数 ====================
 def check_password(password: str) -> bool:
@@ -1416,7 +1591,6 @@ def show_admin_page(data_manager: DataSourceManager):
                     st.success(f"✅ 成功解析 {len(excel_draws)} 期数据")
                     data_manager.set_excel_data(excel_draws)
                     
-                    # 预览前10期
                     preview_df = pd.DataFrame([{
                         '期号': d['period'],
                         '红球': ','.join(str(r) for r in d['reds']),
@@ -1489,20 +1663,29 @@ if 'data_manager' not in st.session_state:
 
 data_manager = st.session_state['data_manager']
 
-# ==================== 主页面 ====================
+# ==================== 加载数据 ====================
+draws = load_from_supabase()
 
-# 右上角齿轮
-col_title, col_settings = st.columns([0.95, 0.05])
-with col_settings:
-    if st.button("⚙️", key="settings_icon", help="管理员设置"):
-        st.session_state['show_admin'] = not st.session_state.get('show_admin', False)
+if not draws or len(draws) < 10:
+    with st.spinner("正在从数据源获取历史数据..."):
+        if data_manager.fetch_all(limit=500):
+            draws = data_manager.get_data()
+            if draws:
+                save_draws_to_supabase(draws)
 
-if st.session_state.get('show_admin', False):
-    if not st.session_state['admin_logged_in']:
-        admin_login()
-    else:
-        show_admin_page(data_manager)
-        admin_logout()
+if not draws or len(draws) < 10:
+    st.info("👈 请点击右上角齿轮图标，进入管理员页面上传Excel文件或同步数据")
+    st.stop()
+
+# ==================== 获取下一期期号 ====================
+def get_next_period(draws: List[Dict]) -> str:
+    """获取下一期期号"""
+    if not draws:
+        return "未知"
+    latest_period = draws[-1].get('period', '')
+    if latest_period and latest_period.isdigit():
+        return str(int(latest_period) + 1)
+    return "未知"
 
 # ==================== 侧边栏 ====================
 with st.sidebar:
@@ -1519,6 +1702,7 @@ with st.sidebar:
             st.success("✅ XGBoost") if XGB_AVAILABLE else st.error("❌ XGBoost")
             st.success("✅ scikit-learn") if SKLEARN_AVAILABLE else st.error("❌ scikit-learn")
         st.caption(f"MCP服务: {'✅ 可用' if MCP_AVAILABLE else '❌ 不可用'}")
+        st.caption(f"数据源: {data_manager.get_source_used()}")
     
     # 数据源状态
     with st.expander("📡 数据源状态", expanded=True):
@@ -1559,86 +1743,209 @@ with st.sidebar:
         """)
     
     st.markdown("---")
-    st.caption("DFSS智能选号工具 v7.0 Final")
+    st.caption("DFSS智能选号工具 v8.0 Final")
 
-# ==================== 加载数据 ====================
-draws = load_from_supabase()
+# ==================== 右上角齿轮 ====================
+col_title, col_settings = st.columns([0.95, 0.05])
+with col_title:
+    st.title("🎯 双色球AI智能选号")
+with col_settings:
+    if st.button("⚙️", key="settings_icon", help="管理员设置"):
+        st.session_state['show_admin'] = not st.session_state.get('show_admin', False)
 
-if not draws or len(draws) < 10:
-    with st.spinner("正在从数据源获取历史数据..."):
-        if data_manager.fetch_all(limit=300):
-            draws = data_manager.get_data()
-            if draws:
-                save_draws_to_supabase(draws)
+if st.session_state.get('show_admin', False):
+    if not st.session_state['admin_logged_in']:
+        admin_login()
+    else:
+        show_admin_page(data_manager)
+        admin_logout()
 
-if not draws or len(draws) < 10:
-    st.info("👈 请点击右上角齿轮图标，进入管理员页面上传Excel文件或同步数据")
-    st.stop()
+# ==================== 数据概览 ====================
+st.subheader("📊 数据概览")
+latest = draws[-1]
+next_period = get_next_period(draws)
+ml_signals = calculate_ml_signals(draws)
 
-# ==================== 主内容 ====================
-st.title("🎯 双色球AI智能选号")
-st.caption(f"📊 当前数据源：{data_manager.get_source_used()} | 共 {len(draws)} 期历史数据 | 最后更新：{data_manager.last_update.strftime('%Y-%m-%d %H:%M') if data_manager.last_update else '未知'}")
+col1, col2, col3, col4, col5, col6 = st.columns(6)
+with col1:
+    st.metric("最新期号", latest.get('period', 'N/A'))
+with col2:
+    date_val = latest.get('date', '')
+    st.metric("最新日期", date_val[:10] if date_val else 'N/A')
+with col3:
+    pool = ml_signals.get('pool', 0)
+    st.metric("奖池金额", f"¥{pool/1e8:.1f}亿")
+with col4:
+    sales = ml_signals.get('sales', 0)
+    st.metric("上期投注额", f"¥{sales/1e8:.1f}亿")
+with col5:
+    st.metric("数据总量", f"{len(draws)}期")
+with col6:
+    signal_strength = ml_signals.get('signal_strength', 0)
+    st.metric("信号强度", f"{signal_strength}%")
+
+st.markdown("---")
+
+# ==================== 预测下一期 + ML提示 ====================
+st.subheader("🎯 预测下一期")
+
+col_pred, col_tip = st.columns([1, 2])
+with col_pred:
+    st.info(f"**下一期：{next_period}**")
+with col_tip:
+    # 获取DeepSeek建议（含ML提示）
+    ai_suggestion = get_deepseek_suggestion(draws, data_manager.get_source_used(), ml_signals, next_period)
+    st.markdown(f'<div class="ml-tip-box">🤖 <strong>ML 提示</strong><br>{ai_suggestion.get("ml_tip", "分析中...")}</div>', unsafe_allow_html=True)
+
+st.markdown("---")
+
+# ==================== 冷热码分析 ====================
+st.subheader("🔥 冷热码分析")
+
+# 分析期数可调节
+analysis_periods = st.slider("统计期数", min_value=20, max_value=min(500, len(draws)), value=min(100, len(draws)), step=10, key="analysis_periods")
+
+cold_hot_data = get_hot_cold_analysis(draws, analysis_periods)
+zone_heat = get_zone_heat(draws, analysis_periods)
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.markdown("**🔥 热门红球 Top 15**")
+    hot_df = pd.DataFrame([
+        {'号码': num, '出现次数': cnt, '得分': f"{cnt/analysis_periods*6*100:.1f}%"}
+        for num, cnt in cold_hot_data['hot_reds']
+    ])
+    st.dataframe(hot_df, use_container_width=True, hide_index=True)
+
+with col2:
+    st.markdown("**❄️ 冷门红球 Bottom 10**")
+    cold_df = pd.DataFrame([
+        {'号码': num, '出现次数': cnt, '遗漏': cold_hot_data['red_absence'][num]}
+        for num, cnt in cold_hot_data['cold_reds']
+    ])
+    st.dataframe(cold_df, use_container_width=True, hide_index=True)
+
+with col3:
+    st.markdown("**📊 7分区热度图**")
+    zone_df = pd.DataFrame([
+        {
+            '分区': zone['name'],
+            '范围': zone['range'],
+            '热度': zone['heat_level'],
+            '出现次数': zone['hits'],
+            '占比': f"{zone['percentage']:.1f}%"
+        }
+        for zone_id, zone in zone_heat.items()
+    ])
+    st.dataframe(zone_df, use_container_width=True, hide_index=True)
+
+st.markdown("---")
+
+# ==================== 和值趋势分析 ====================
+st.subheader("📈 和值趋势分析")
+
+sum_trend = get_sum_trend(draws, analysis_periods=50)
+
+# 绘制和值走势图
+fig_sum = go.Figure()
+fig_sum.add_trace(go.Scatter(
+    x=list(range(len(sum_trend['sums']))),
+    y=sum_trend['sums'],
+    mode='lines+markers',
+    name='红球和值',
+    line=dict(color='#ff6b6b', width=2),
+    marker=dict(size=6)
+))
+fig_sum.add_hline(y=RED_EXPECTED_SUM, line_dash="dash", line_color="red", annotation_text="理论均值(102)")
+fig_sum.add_hline(y=sum_trend['mean_sum'], line_dash="dot", line_color="green", annotation_text=f"均值({sum_trend['mean_sum']:.0f})")
+
+# 添加预测目标线
+target_sum, _ = Method1HotColdSum(draws).get_target_sum()
+fig_sum.add_hline(y=target_sum, line_dash="dash", line_color="orange", annotation_text=f"预测目标({target_sum})")
+
+fig_sum.add_hrect(y0=RED_EXPECTED_SUM - RED_SUM_STD, y1=RED_EXPECTED_SUM + RED_SUM_STD, 
+                  line_width=0, fillcolor="green", opacity=0.1, annotation_text="约68%区间")
+fig_sum.update_layout(
+    title="最近50期红球和值走势",
+    xaxis_title="期数（倒序）",
+    yaxis_title="和值",
+    height=400,
+    hovermode='x unified'
+)
+st.plotly_chart(fig_sum, use_container_width=True)
+
+st.markdown("---")
+
+# ==================== 蓝球走势分析 ====================
+st.subheader("💙 蓝球走势分析")
+
+blue_trend = get_blue_trend(draws, analysis_periods=50)
+
+col1, col2 = st.columns(2)
+
+with col1:
+    # 蓝球频率柱状图
+    blue_freq_df = pd.DataFrame([
+        {'蓝球': num, '出现次数': blue_trend['blue_freq'][num]}
+        for num in range(1, 17)
+    ])
+    fig_blue = px.bar(
+        blue_freq_df, x='蓝球', y='出现次数',
+        title=f"最近{blue_trend['analysis_periods']}期蓝球出现频率",
+        color='出现次数',
+        color_continuous_scale='Blues'
+    )
+    fig_blue.update_layout(height=400)
+    st.plotly_chart(fig_blue, use_container_width=True)
+
+with col2:
+    st.markdown("**📊 蓝球统计**")
+    stats_df = pd.DataFrame([
+        {'指标': '小号(1-8)出现次数', '数值': blue_trend['small_count']},
+        {'指标': '大号(9-16)出现次数', '数值': blue_trend['large_count']},
+        {'指标': '小号占比', '数值': f"{blue_trend['small_count']/blue_trend['analysis_periods']*100:.1f}%"},
+        {'指标': '大号占比', '数值': f"{blue_trend['large_count']/blue_trend['analysis_periods']*100:.1f}%"},
+    ])
+    st.dataframe(stats_df, use_container_width=True, hide_index=True)
+    
+    st.markdown("**📋 蓝球遗漏Top 5**")
+    blue_absence_sorted = sorted(blue_trend['blue_absence'].items(), key=lambda x: x[1], reverse=True)[:5]
+    absence_df = pd.DataFrame([
+        {'蓝球': num, '遗漏期数': absence}
+        for num, absence in blue_absence_sorted
+    ])
+    st.dataframe(absence_df, use_container_width=True, hide_index=True)
 
 st.markdown("---")
 
 # ==================== AI决策引擎 ====================
 st.subheader("🧠 AI决策引擎分析")
 
-ml_signals = calculate_ml_signals(draws)
+red_scores = Method1HotColdSum(draws).calculate_red_scores()
+blue_scores = Method1HotColdSum(draws).calculate_blue_scores()
+
+top_red = sorted(red_scores.items(), key=lambda x: x[1], reverse=True)[:5]
+top_blue = sorted(blue_scores.items(), key=lambda x: x[1], reverse=True)[:5]
+target_sum, tolerance = Method1HotColdSum(draws).get_target_sum()
 
 col1, col2, col3, col4, col5 = st.columns(5)
 with col1:
-    red_scores = Method1HotColdSum(draws).calculate_red_scores()
-    top_red = sorted(red_scores.items(), key=lambda x: x[1], reverse=True)[:3]
-    st.metric("🔥 红球热号", ", ".join([str(r[0]) for r in top_red]))
+    st.metric("🔥 红球热号", ", ".join([str(r[0]) for r in top_red[:3]]))
 with col2:
-    blue_scores = Method1HotColdSum(draws).calculate_blue_scores()
-    top_blue = sorted(blue_scores.items(), key=lambda x: x[1], reverse=True)[:3]
-    st.metric("💙 蓝球热号", ", ".join([str(b[0]) for b in top_blue]))
+    st.metric("💙 蓝球热号", ", ".join([str(b[0]) for b in top_blue[:3]]))
 with col3:
-    target_sum, _ = Method1HotColdSum(draws).get_target_sum()
-    st.metric("📊 目标和值", f"{target_sum} ± {RED_SUM_STD}")
+    st.metric("📊 目标和值", f"{target_sum} ± {tolerance}")
 with col4:
     st.metric("📈 信号强度", f"{ml_signals['signal_strength']}%")
 with col5:
-    st.metric("🎯 建议", ml_signals['suggestion_text'][:8])
-
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    st.info(f"**奖池阈值**\n{ml_signals['jackpot_level']}")
-with col2:
-    st.info(f"**剪刀差信号**\n{ml_signals['scissors']}")
-with col3:
-    st.info(f"**头奖周期**\n{ml_signals['cycle']}")
-with col4:
-    st.info(f"**蓝球偏向**\n{ml_signals['blue_bias']}")
+    signal_text = ml_signals['suggestion_text']
+    st.metric("🎯 建议", signal_text[:8] + "...")
 
 st.markdown("---")
 
-# ==================== DeepSeek AI建议 ====================
-st.subheader("💡 智能投注建议")
-ai_suggestion = get_deepseek_suggestion(draws, data_manager.get_source_used(), ml_signals)
-
-with st.container():
-    st.markdown(f"""
-    <div class="ai-suggestion-box">
-        <h4>🤖 DeepSeek AI 分析</h4>
-        <p><strong>📊 {ai_suggestion.get('summary', '基于历史数据分析，本期适合标准投注策略')}</strong></p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    col_rec1, col_rec2, col_rec3 = st.columns(3)
-    with col_rec1:
-        st.info(f"📈 **建议方案**\n\n{ai_suggestion.get('plan', '4组7+1复式')}")
-    with col_rec2:
-        st.warning(f"🎯 **预期赢率**\n\n{ai_suggestion.get('win_rate', '30-35%')}")
-    with col_rec3:
-        st.success(f"💰 **最优蓝球**\n\n{ai_suggestion.get('blue_advice', '侧重小号1-8')}")
-
-st.markdown("---")
-
-# ==================== 投注生成 ====================
-st.subheader("🎲 生成AI投注")
+# ==================== 智能投注生成 ====================
+st.subheader("🎲 智能投注生成")
 
 col1, col2, col3 = st.columns(3)
 with col1:
@@ -1652,7 +1959,24 @@ with col3:
         key="ai_model"
     )
 
+col1, col2 = st.columns(2)
+with col1:
+    require_pattern = st.checkbox("☑ 连号/跳号要求", value=True, key="require_pattern")
+with col2:
+    require_repeat = st.checkbox("☑ 上期重复1-2个要求", value=True, key="require_repeat")
+
+seed_input = st.text_input("随机种子 (可选)", value="", placeholder="例如: 2026-05-06")
+
 if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
+    if seed_input and seed_input.strip():
+        try:
+            seed_val = int(seed_input)
+            random.seed(seed_val)
+            np.random.seed(seed_val)
+        except:
+            random.seed()
+            np.random.seed()
+    
     with st.spinner(f"正在使用 {ai_model} 生成投注..."):
         method_name = ai_model.split(":")[0] if ":" in ai_model else ai_model
         bets = BetGenerator.generate(method_name, draws, num_bets)
@@ -1660,6 +1984,7 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
         st.session_state['model_used'] = ai_model
     st.success(f"✅ 使用 {ai_model} 生成 {len(bets)} 组投注")
 
+# 显示生成的投注
 if st.session_state['generated_bets']:
     bets = st.session_state['generated_bets']
     model_used = st.session_state.get('model_used', '未知')
@@ -1667,6 +1992,7 @@ if st.session_state['generated_bets']:
     st.markdown(f"### 📝 推荐投注组合 - {model_used}")
     st.caption(f"{bet_type}复式，每组成本{bet_type.split('(')[1] if '(' in bet_type else '14元'}")
     
+    # 用卡片形式显示
     cols = st.columns(min(num_bets, 4))
     for i, bet in enumerate(bets):
         col_idx = i % 4
@@ -1723,6 +2049,22 @@ with st.expander("📈 ROI回测分析"):
                 })
             
             st.dataframe(pd.DataFrame(results), use_container_width=True, hide_index=True)
+            
+            # 显示奖金明细
+            st.markdown("**🏆 奖金明细（方法4）**")
+            method4_result = backtest_roi(draws, "方法4: XGBoost+NN集成", backtest_bets, backtest_periods)
+            breakdown = method4_result.get('prize_breakdown', {})
+            breakdown_df = pd.DataFrame([
+                {'奖级': '一等奖', '中奖注数': breakdown.get('first', 0)},
+                {'奖级': '二等奖', '中奖注数': breakdown.get('second', 0)},
+                {'奖级': '三等奖', '中奖注数': breakdown.get('third', 0)},
+                {'奖级': '四等奖', '中奖注数': breakdown.get('fourth', 0)},
+                {'奖级': '五等奖', '中奖注数': breakdown.get('fifth', 0)},
+                {'奖级': '六等奖', '中奖注数': breakdown.get('sixth', 0)},
+                {'奖级': '福运奖', '中奖注数': breakdown.get('fuyun', 0)},
+            ])
+            st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
+            
             st.caption(f"回测期间：最近{backtest_periods}期 | 每组成本14元")
 
 st.markdown("---")
