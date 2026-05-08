@@ -527,32 +527,70 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
         return None
       
 def show_admin_page():
-    """管理员页面 - 可编辑数据框（简洁版，参考六合彩）"""
+    """管理员页面 - 使用 st.data_editor 实现可编辑表格"""
     st.subheader("📋 数据编辑器")
-    
-    # 格式说明（简洁明了）
-    st.caption("📌 格式：期号 日期 红1 红2 红3 红4 红5 红6 蓝球 奖池 一等奖注数 一等奖奖金 二等奖注数 二等奖奖金 销量")
-    st.code("26049 2026-05-03 3 4 14 15 18 20 2 1490262206 6 6941614 112 416060 378548054", language="text")
-    st.caption("💡 支持Tab或空格分隔，可直接从Excel复制整行数据（不要复制表头）")
+    st.caption("💡 双击单元格可编辑，支持从Excel复制粘贴整个表格区域")
     
     # 加载现有数据
     current_draws = st.session_state.get('draws_loaded', [])
     
-    # 生成显示文本（只有数据行，没有表头）
+    # 转换为DataFrame用于编辑
     if current_draws:
         display_draws = sorted(current_draws, key=lambda x: x.get('period', 0), reverse=True)
-        text_lines = [draw_to_text_line(d) for d in display_draws[:100]]
-        data_text = "\n".join(text_lines)
+        
+        df_data = []
+        for d in display_draws[:100]:
+            reds = d.get('reds', [])
+            row = {
+                '期号': d.get('period', ''),
+                '开奖日期': d.get('date', ''),
+                '红1': reds[0] if len(reds) > 0 else 0,
+                '红2': reds[1] if len(reds) > 1 else 0,
+                '红3': reds[2] if len(reds) > 2 else 0,
+                '红4': reds[3] if len(reds) > 3 else 0,
+                '红5': reds[4] if len(reds) > 4 else 0,
+                '红6': reds[5] if len(reds) > 5 else 0,
+                '蓝球': d.get('blue', 0),
+                '奖池奖金(元)': d.get('pool', 0),
+                '一等奖注数': d.get('prize1_count', 0),
+                '一等奖奖金(元)': d.get('prize1_amount', 0),
+                '二等奖注数': d.get('prize2_count', 0),
+                '二等奖奖金(元)': d.get('prize2_amount', 0),
+                '总投注额(元)': d.get('sales', 0)
+            }
+            df_data.append(row)
+        df = pd.DataFrame(df_data)
     else:
-        data_text = ""
+        # 空DataFrame，带正确的列
+        df = pd.DataFrame(columns=[
+            '期号', '开奖日期', '红1', '红2', '红3', '红4', '红5', '红6', '蓝球',
+            '奖池奖金(元)', '一等奖注数', '一等奖奖金(元)', '二等奖注数', '二等奖奖金(元)', '总投注额(元)'
+        ])
     
-    # 可编辑文本域（简洁，只放数据）
-    edited_text = st.text_area(
-        "📝 数据内容（每行一期，直接编辑）",
-        value=data_text,
-        height=400,
-        key="data_editor",
-        help="Ctrl+A 全选，Delete 删除，粘贴新数据后点击保存"
+    # 使用 st.data_editor 显示可编辑表格
+    edited_df = st.data_editor(
+        df,
+        use_container_width=True,
+        height=500,
+        num_rows="dynamic",  # 允许动态添加/删除行
+        column_config={
+            "期号": st.column_config.NumberColumn("期号", required=True, step=1),
+            "开奖日期": st.column_config.DateColumn("开奖日期", format="YYYY-MM-DD"),
+            "红1": st.column_config.NumberColumn("红1", min_value=1, max_value=33, step=1),
+            "红2": st.column_config.NumberColumn("红2", min_value=1, max_value=33, step=1),
+            "红3": st.column_config.NumberColumn("红3", min_value=1, max_value=33, step=1),
+            "红4": st.column_config.NumberColumn("红4", min_value=1, max_value=33, step=1),
+            "红5": st.column_config.NumberColumn("红5", min_value=1, max_value=33, step=1),
+            "红6": st.column_config.NumberColumn("红6", min_value=1, max_value=33, step=1),
+            "蓝球": st.column_config.NumberColumn("蓝球", min_value=1, max_value=16, step=1),
+            "奖池奖金(元)": st.column_config.NumberColumn("奖池奖金(元)", format="%d"),
+            "一等奖注数": st.column_config.NumberColumn("一等奖注数", step=1),
+            "一等奖奖金(元)": st.column_config.NumberColumn("一等奖奖金(元)", format="%d"),
+            "二等奖注数": st.column_config.NumberColumn("二等奖注数", step=1),
+            "二等奖奖金(元)": st.column_config.NumberColumn("二等奖奖金(元)", format="%d"),
+            "总投注额(元)": st.column_config.NumberColumn("总投注额(元)", format="%d"),
+        },
+        key="data_editor_table"
     )
     
     # 操作按钮
@@ -572,25 +610,61 @@ def show_admin_page():
     with col2:
         if st.button("💾 保存到数据库", type="primary", use_container_width=True):
             with st.spinner("保存中..."):
-                lines = edited_text.strip().split('\n')
+                # 将编辑后的DataFrame转换为draws列表
                 new_draws = []
-                errors = []
+                errors = 0
                 
-                for i, line in enumerate(lines, 1):
-                    if not line.strip():
-                        continue
-                    draw = text_line_to_draw(line, i)
-                    if draw:
-                        new_draws.append(draw)
-                    else:
-                        errors.append(f"行{i}: 格式错误")
+                for idx, row in edited_df.iterrows():
+                    try:
+                        # 跳过空行
+                        if pd.isna(row['期号']) or row['期号'] == "":
+                            continue
+                        
+                        period = int(row['期号']) if str(row['期号']).isdigit() else row['期号']
+                        date = row['开奖日期'].strftime('%Y-%m-%d') if pd.notna(row['开奖日期']) else None
+                        
+                        reds = [
+                            int(row['红1']) if pd.notna(row['红1']) else 0,
+                            int(row['红2']) if pd.notna(row['红2']) else 0,
+                            int(row['红3']) if pd.notna(row['红3']) else 0,
+                            int(row['红4']) if pd.notna(row['红4']) else 0,
+                            int(row['红5']) if pd.notna(row['红5']) else 0,
+                            int(row['红6']) if pd.notna(row['红6']) else 0,
+                        ]
+                        blue = int(row['蓝球']) if pd.notna(row['蓝球']) else 0
+                        pool = int(row['奖池奖金(元)']) if pd.notna(row['奖池奖金(元)']) else 0
+                        sales = int(row['总投注额(元)']) if pd.notna(row['总投注额(元)']) else 0
+                        prize1_count = int(row['一等奖注数']) if pd.notna(row['一等奖注数']) else 0
+                        prize1_amount = int(row['一等奖奖金(元)']) if pd.notna(row['一等奖奖金(元)']) else 0
+                        prize2_count = int(row['二等奖注数']) if pd.notna(row['二等奖注数']) else 0
+                        prize2_amount = int(row['二等奖奖金(元)']) if pd.notna(row['二等奖奖金(元)']) else 0
+                        
+                        # 验证红球范围
+                        valid_reds = all(1 <= r <= 33 for r in reds if r > 0)
+                        valid_blue = 1 <= blue <= 16 if blue > 0 else True
+                        
+                        if valid_reds and valid_blue:
+                            new_draws.append({
+                                'period': period,
+                                'date': date,
+                                'reds': sorted(reds),
+                                'blue': blue,
+                                'pool': pool,
+                                'sales': sales,
+                                'prize1_count': prize1_count,
+                                'prize1_amount': prize1_amount,
+                                'prize2_count': prize2_count,
+                                'prize2_amount': prize2_amount
+                            })
+                        else:
+                            errors += 1
+                    except Exception:
+                        errors += 1
                 
-                if errors:
-                    for err in errors[:5]:
-                        st.error(err)
-                    if len(errors) > 5:
-                        st.error(f"... 还有 {len(errors)-5} 行错误")
-                elif new_draws:
+                if errors > 0:
+                    st.warning(f"跳过 {errors} 行无效数据")
+                
+                if new_draws:
                     new_draws = fill_missing_with_history(new_draws)
                     new_draws.sort(key=lambda x: x.get('period', 0))
                     saved = save_draws_to_supabase(new_draws)
@@ -598,10 +672,12 @@ def show_admin_page():
                         st.session_state['draws_loaded'] = new_draws
                         st.success(f"保存 {saved} 期数据成功！")
                         st.rerun()
+                else:
+                    st.error("没有有效数据可保存")
     
     with col3:
-        if st.button("🗑️ 清空编辑框", use_container_width=True):
-            st.session_state['data_editor'] = ""
+        if st.button("➕ 添加空行", use_container_width=True):
+            st.session_state['data_editor_table'] = edited_df
             st.rerun()
     
     with col4:
@@ -613,13 +689,13 @@ def show_admin_page():
     
     st.markdown("---")
     st.subheader("📎 Excel文件上传")
-    st.caption("支持 .xlsx 或 .xls 格式，第一行为列标题，第二行开始为数据")
+    st.caption("支持 .xlsx 或 .xls 格式，上传后自动替换当前数据")
     
     uploaded_file = st.file_uploader(
         "选择Excel文件",
         type=['xlsx', 'xls'],
         key="excel_uploader",
-        help="上传Excel文件，格式与上方示例一致"
+        help="上传Excel文件，将替换当前所有数据"
     )
     
     if uploaded_file is not None:
@@ -628,13 +704,11 @@ def show_admin_page():
             if excel_draws and len(excel_draws) > 0:
                 st.success(f"✅ 成功解析 {len(excel_draws)} 期数据")
                 
-                # 简洁预览
                 preview_df = pd.DataFrame([{
                     '期号': d['period'],
                     '日期': str(d.get('date', ''))[:10],
                     '红球': ','.join(f"{r:02d}" for r in d['reds']),
-                    '蓝球': f"{d['blue']:02d}",
-                    '奖池(亿)': f"{d.get('pool', 0)/1e8:.1f}"
+                    '蓝球': f"{d['blue']:02d}"
                 } for d in excel_draws[:10]])
                 st.dataframe(preview_df, use_container_width=True, hide_index=True)
                 
