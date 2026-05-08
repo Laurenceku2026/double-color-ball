@@ -1807,10 +1807,10 @@ col1, col2, col3 = st.columns(3)
 with col1:
     st.markdown("**🔥 热门红球 Top 15**")
     hot_df = pd.DataFrame([
-        {'号码': num, '出现次数': cnt, '频率': f"{cnt/analysis_periods*6*100:.1f}%"}
-        for num, cnt in cold_hot_data['hot_reds']
-    ])
-    st.dataframe(hot_df, use_container_width=True, hide_index=True)
+    {'号码': num, '出现次数': cnt, '频率': cnt/analysis_periods*6*100}
+    for num, cnt in cold_hot_data['hot_reds']
+])
+st.dataframe(hot_df.style.format({'频率': '{:.1f}%'}), use_container_width=True, hide_index=True)
 
 with col2:
     st.markdown("**❄️ 冷门红球 Bottom 10**")
@@ -1823,24 +1823,24 @@ with col2:
 with col3:
     st.markdown("**📊 7分区热度图**")
     zone_df = pd.DataFrame([
-        {
-            '分区': zone['name'],
-            '范围': zone['range'],
-            '热度': zone['heat_level'],
-            '出现次数': zone['hits'],
-            '占比': f"{zone['percentage']:.1f}%"
-        }
-        for zone_id, zone in zone_heat.items()
-    ])
-    st.dataframe(zone_df, use_container_width=True, hide_index=True)
+    {
+        '分区': zone['name'],
+        '范围': zone['range'],
+        '热度': zone['heat_level'],
+        '出现次数': zone['hits'],
+        '占比': zone['percentage']
+    }
+    for zone_id, zone in zone_heat.items()
+])
+st.dataframe(zone_df.style.format({'占比': '{:.1f}%'}), use_container_width=True, hide_index=True)
 
 # 蓝球热号单独显示
 st.markdown("**💙 热门蓝球 Top 8**")
 hot_blues_df = pd.DataFrame([
-    {'蓝球': num, '出现次数': cnt, '频率': f"{cnt/analysis_periods*100:.1f}%"}
+    {'蓝球': num, '出现次数': cnt, '频率': cnt/analysis_periods*100}
     for num, cnt in cold_hot_data['hot_blues']
 ])
-st.dataframe(hot_blues_df, use_container_width=True, hide_index=True)
+st.dataframe(hot_blues_df.style.format({'频率': '{:.1f}%'}), use_container_width=True, hide_index=True)
 
 st.markdown("---")
 
