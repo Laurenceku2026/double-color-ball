@@ -25,38 +25,50 @@ from supabase import create_client, Client
 warnings.filterwarnings('ignore')
 
 # ==================== 尝试导入ML库 ====================
+# ==================== 尝试导入ML库（健壮版） ====================
 LGB_AVAILABLE = False
 XGB_AVAILABLE = False
 SKLEARN_AVAILABLE = False
 MCP_AVAILABLE = False
 
+# LightGBM
 try:
     import lightgbm as lgb
     LGB_AVAILABLE = True
-except ImportError:
-    pass
+    print("✅ LightGBM 导入成功")
+except ImportError as e:
+    print(f"❌ LightGBM 导入失败: {e}")
+    LGB_AVAILABLE = False
 
+# XGBoost
 try:
     import xgboost as xgb
     XGB_AVAILABLE = True
-except ImportError:
-    pass
+    print("✅ XGBoost 导入成功")
+except ImportError as e:
+    print(f"❌ XGBoost 导入失败: {e}")
+    XGB_AVAILABLE = False
 
+# scikit-learn
 try:
     from sklearn.neural_network import MLPClassifier
     from sklearn.preprocessing import StandardScaler
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.model_selection import train_test_split
     SKLEARN_AVAILABLE = True
-except ImportError:
-    pass
+    print("✅ scikit-learn 导入成功")
+except ImportError as e:
+    print(f"❌ scikit-learn 导入失败: {e}")
+    SKLEARN_AVAILABLE = False
 
+# MCP服务（可选）
 try:
     from ssq_mcp import get_recent_data, get_data_by_issue_range, get_frequency_analysis
     MCP_AVAILABLE = True
-except ImportError:
-    pass
-
+    print("✅ MCP服务 导入成功")
+except ImportError as e:
+    print(f"❌ MCP服务 导入失败: {e}")
+    MCP_AVAILABLE = False
 # ==================== 页面配置 ====================
 st.set_page_config(
     page_title="双色球AI分析工具 - 专业版",
@@ -533,14 +545,22 @@ with st.sidebar:
     
     # ML库状态
     with st.expander("🤖 ML库状态", expanded=False):
-        col1, col2 = st.columns(2)
-        with col1:
-            st.success("✅ Python 3.11")
-            st.success("✅ LightGBM") if LGB_AVAILABLE else st.error("❌ LightGBM")
-        with col2:
-            st.success("✅ XGBoost") if XGB_AVAILABLE else st.error("❌ XGBoost")
-            st.success("✅ scikit-learn") if SKLEARN_AVAILABLE else st.error("❌ scikit-learn")
-        st.caption(f"MCP服务: {'✅ 可用' if MCP_AVAILABLE else '❌ 不可用'}")
+    col1, col2 = st.columns(2)
+    with col1:
+        if LGB_AVAILABLE:
+            st.markdown("✅ **LightGBM**")
+        else:
+            st.markdown("❌ **LightGBM**")
+        if XGB_AVAILABLE:
+            st.markdown("✅ **XGBoost**")
+        else:
+            st.markdown("❌ **XGBoost**")
+    with col2:
+        if SKLEARN_AVAILABLE:
+            st.markdown("✅ **scikit-learn**")
+        else:
+            st.markdown("❌ **scikit-learn**")
+    st.caption(f"MCP服务: {'✅ 可用' if MCP_AVAILABLE else '❌ 不可用'}")
     
     # 四种算法对比
     with st.expander("📖 四种AI算法对比"):
