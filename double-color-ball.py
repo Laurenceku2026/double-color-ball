@@ -527,34 +527,38 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
         return None
       
 def show_admin_page():
-    """管理员页面 - 可编辑数据框 + Excel上传"""
+    """管理员页面 - 可编辑数据框（表头固定）"""
     st.subheader("📋 数据编辑器")
     
-    # 格式说明（带表头）
-    st.caption("格式说明（15列，Tab或空格分隔）：")
-    st.code("期号\t开奖日期\t红1\t红2\t红3\t红4\t红5\t红6\t蓝球\t奖池奖金(元)\t一等奖注数\t一等奖奖金(元)\t二等奖注数\t二等奖奖金(元)\t总投注额(元)")
-    st.caption("支持Tab或空格分隔，可直接从Excel复制粘贴。最多显示100行，可滚动。")
+    # 固定表头（不可编辑，仅用于显示格式说明）
+    st.markdown("**📌 数据格式（15列，Tab分隔）：**")
+    col_names = st.columns(15)
+    headers = ["期号", "开奖日期", "红1", "红2", "红3", "红4", "红5", "红6", "蓝球", 
+               "奖池(元)", "一等奖注数", "一等奖奖金(元)", "二等奖注数", "二等奖奖金(元)", "总投注额(元)"]
+    for i, col in enumerate(col_names):
+        col.markdown(f"**{headers[i]}**")
+    
+    st.caption("💡 每行格式：期号 日期 红1 红2 红3 红4 红5 红6 蓝球 奖池 一注定数 一注奖金 二注定数 二注奖金 销量")
+    st.caption("💡 支持Tab或空格分隔，可直接从Excel复制数据行（不要复制表头）")
     
     # 加载现有数据
     current_draws = st.session_state.get('draws_loaded', [])
     
-    # 生成显示文本（带表头）
-    header = "期号\t开奖日期\t红1\t红2\t红3\t红4\t红5\t红6\t蓝球\t奖池奖金(元)\t一等奖注数\t一等奖奖金(元)\t二等奖注数\t二等奖奖金(元)\t总投注额(元)"
-    
+    # 生成显示文本（只有数据行，没有表头）
     if current_draws:
         display_draws = sorted(current_draws, key=lambda x: x.get('period', 0), reverse=True)
         text_lines = [draw_to_text_line(d) for d in display_draws[:100]]
-        data_text = header + "\n" + "\n".join(text_lines)
+        data_text = "\n".join(text_lines)
     else:
-        data_text = header + "\n"
+        data_text = ""
     
-    # 可编辑文本域
+    # 可编辑文本域（只放数据，不放表头）
     edited_text = st.text_area(
-        "数据内容（可直接编辑，第一行为表头）",
+        "📝 数据内容（直接编辑数据行，表头固定）",
         value=data_text,
         height=400,
         key="data_editor",
-        help="第一行是表头，不要删除。Ctrl+A 全选，Delete 删除，粘贴新数据后点击保存"
+        help="每行一期数据，Tab或空格分隔。Ctrl+A 全选，Delete 删除，粘贴新数据后点击保存"
     )
     
     # 操作按钮
@@ -575,12 +579,10 @@ def show_admin_page():
         if st.button("💾 保存到数据库", type="primary", use_container_width=True):
             with st.spinner("保存中..."):
                 lines = edited_text.strip().split('\n')
-                # 跳过第一行表头
-                data_lines = lines[1:] if len(lines) > 1 else []
                 new_draws = []
                 errors = []
                 
-                for i, line in enumerate(data_lines, 2):  # 从第2行开始计数
+                for i, line in enumerate(lines, 1):
                     if not line.strip():
                         continue
                     draw = text_line_to_draw(line, i)
@@ -605,8 +607,7 @@ def show_admin_page():
     
     with col3:
         if st.button("🗑️ 清空编辑框", use_container_width=True):
-            # 清空后保留表头
-            st.session_state['data_editor'] = header + "\n"
+            st.session_state['data_editor'] = ""
             st.rerun()
     
     with col4:
@@ -634,7 +635,7 @@ def show_admin_page():
             if excel_draws and len(excel_draws) > 0:
                 st.success(f"✅ 成功解析 {len(excel_draws)} 期数据")
                 
-                # 显示预览
+                # 显示预览（带固定表头）
                 preview_df = pd.DataFrame([{
                     '期号': d['period'],
                     '日期': d.get('date', ''),
