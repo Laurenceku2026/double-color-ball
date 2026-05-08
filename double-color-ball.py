@@ -539,28 +539,29 @@ if not draws or len(draws) < 5:
     st.stop()
 
 # ==================== 侧边栏 ====================
+# ==================== 侧边栏 ====================
 with st.sidebar:
     st.markdown("### 🎰 双色球AI分析工具")
     st.markdown("---")
     
     # ML库状态
     with st.expander("🤖 ML库状态", expanded=False):
-    col1, col2 = st.columns(2)
-    with col1:
-        if LGB_AVAILABLE:
-            st.markdown("✅ **LightGBM**")
-        else:
-            st.markdown("❌ **LightGBM**")
-        if XGB_AVAILABLE:
-            st.markdown("✅ **XGBoost**")
-        else:
-            st.markdown("❌ **XGBoost**")
-    with col2:
-        if SKLEARN_AVAILABLE:
-            st.markdown("✅ **scikit-learn**")
-        else:
-            st.markdown("❌ **scikit-learn**")
-    st.caption(f"MCP服务: {'✅ 可用' if MCP_AVAILABLE else '❌ 不可用'}")
+        col1, col2 = st.columns(2)
+        with col1:
+            if LGB_AVAILABLE:
+                st.markdown("✅ **LightGBM**")
+            else:
+                st.markdown("❌ **LightGBM**")
+            if XGB_AVAILABLE:
+                st.markdown("✅ **XGBoost**")
+            else:
+                st.markdown("❌ **XGBoost**")
+        with col2:
+            if SKLEARN_AVAILABLE:
+                st.markdown("✅ **scikit-learn**")
+            else:
+                st.markdown("❌ **scikit-learn**")
+        st.caption(f"MCP服务: {'✅ 可用' if MCP_AVAILABLE else '❌ 不可用'}")
     
     # 四种算法对比
     with st.expander("📖 四种AI算法对比"):
@@ -589,6 +590,8 @@ with st.sidebar:
     
     st.markdown("---")
     st.caption("DFSS智能选号工具 v11.0")
+
+# ==================== 主页面内容（注意：这里不能有缩进！）====================
 
 # ==================== 显示数据概览 ====================
 st.subheader("📊 数据概览")
