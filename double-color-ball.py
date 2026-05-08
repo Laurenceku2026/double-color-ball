@@ -544,7 +544,7 @@ with st.sidebar:
     st.markdown("---")
     
     # ML库状态
-with st.expander("🤖 ML库状态", expanded=False):
+    with st.expander("🤖 ML库状态", expanded=False):
     col1, col2 = st.columns(2)
     with col1:
         if LGB_AVAILABLE:
