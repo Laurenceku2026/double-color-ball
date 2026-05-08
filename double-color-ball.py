@@ -622,6 +622,7 @@ print("第1部分加载完成")
 # ============================================================
 
 # ==================== 冷热码分析 ====================
+# ==================== 冷热码分析（修正版） ====================
 def get_hot_cold_analysis(draws: List[Dict], analysis_periods: int = 100):
     """获取冷热码分析数据"""
     if len(draws) < analysis_periods:
@@ -660,9 +661,13 @@ def get_hot_cold_analysis(draws: List[Dict], analysis_periods: int = 100):
                 break
         blue_absence[num] = last_seen if last_seen is not None else len(draws)
     
-    # 热门红球 Top 15
+    # 计算频率（正确的公式：出现次数 / 期数 / 6 * 100）
+    total_draws = len(recent_draws)
+    total_red_balls = total_draws * 6
+    
+    # 热门红球 Top 15（按出现次数排序）
     hot_reds = sorted(red_freq.items(), key=lambda x: x[1], reverse=True)[:15]
-    # 冷门红球 Bottom 10
+    # 冷门红球 Bottom 10（按出现次数排序）
     cold_reds = sorted(red_freq.items(), key=lambda x: x[1])[:10]
     # 热门蓝球 Top 8
     hot_blues = sorted(blue_freq.items(), key=lambda x: x[1], reverse=True)[:8]
@@ -675,9 +680,9 @@ def get_hot_cold_analysis(draws: List[Dict], analysis_periods: int = 100):
         'blue_freq': blue_freq,
         'red_absence': red_absence,
         'blue_absence': blue_absence,
-        'analysis_periods': analysis_periods
+        'analysis_periods': analysis_periods,
+        'total_draws': total_draws
     }
-
 
 # ==================== 7分区热度分析 ====================
 def get_zone_heat(draws: List[Dict], analysis_periods: int = 100):
@@ -1775,6 +1780,7 @@ print("第3部分加载完成")
 # ============================================================
 
 # ==================== 冷热码分析显示 ====================
+# ==================== 冷热码分析显示 ====================
 st.subheader("🔥 冷热码分析")
 
 col1, col2 = st.columns(2)
@@ -1807,10 +1813,10 @@ col1, col2, col3 = st.columns(3)
 with col1:
     st.markdown("**🔥 热门红球 Top 15**")
     hot_df = pd.DataFrame([
-    {'号码': num, '出现次数': cnt, '频率': cnt/analysis_periods*6*100}
-    for num, cnt in cold_hot_data['hot_reds']
-])
-st.dataframe(hot_df.style.format({'频率': '{:.1f}%'}), use_container_width=True, hide_index=True)
+        {'号码': num, '出现次数': cnt, '频率': cnt / cold_hot_data['total_draws'] / 6 * 100}
+        for num, cnt in cold_hot_data['hot_reds']
+    ])
+    st.dataframe(hot_df.style.format({'频率': '{:.1f}%'}), use_container_width=True, hide_index=True)
 
 with col2:
     st.markdown("**❄️ 冷门红球 Bottom 10**")
@@ -1823,21 +1829,21 @@ with col2:
 with col3:
     st.markdown("**📊 7分区热度图**")
     zone_df = pd.DataFrame([
-    {
-        '分区': zone['name'],
-        '范围': zone['range'],
-        '热度': zone['heat_level'],
-        '出现次数': zone['hits'],
-        '占比': zone['percentage']
-    }
-    for zone_id, zone in zone_heat.items()
-])
-st.dataframe(zone_df.style.format({'占比': '{:.1f}%'}), use_container_width=True, hide_index=True)
+        {
+            '分区': zone['name'],
+            '范围': zone['range'],
+            '热度': zone['heat_level'],
+            '出现次数': zone['hits'],
+            '占比': zone['percentage']
+        }
+        for zone_id, zone in zone_heat.items()
+    ])
+    st.dataframe(zone_df.style.format({'占比': '{:.1f}%'}), use_container_width=True, hide_index=True)
 
 # 蓝球热号单独显示
 st.markdown("**💙 热门蓝球 Top 8**")
 hot_blues_df = pd.DataFrame([
-    {'蓝球': num, '出现次数': cnt, '频率': cnt/analysis_periods*100}
+    {'蓝球': num, '出现次数': cnt, '频率': cnt / cold_hot_data['total_draws'] * 100}
     for num, cnt in cold_hot_data['hot_blues']
 ])
 st.dataframe(hot_blues_df.style.format({'频率': '{:.1f}%'}), use_container_width=True, hide_index=True)
