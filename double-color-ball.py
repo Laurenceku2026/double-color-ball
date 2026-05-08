@@ -404,34 +404,161 @@ def admin_logout():
         st.session_state['admin_logged_in'] = False
         st.session_state['show_admin'] = False
         st.rerun()
-
+# ==================== Excel解析器 ====================
+def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
+    """解析用户上传的Excel文件"""
+    try:
+        # 尝试导入 openpyxl
+        try:
+            import openpyxl
+        except ImportError:
+            st.error("缺少 openpyxl 库，请使用文本粘贴功能")
+            return None
+        
+        df = pd.read_excel(uploaded_file, sheet_name=0)
+        
+        # 尝试识别列名
+        period_col = None
+        date_col = None
+        red_cols = []
+        blue_col = None
+        pool_col = None
+        sales_col = None
+        
+        # 常见列名映射
+        period_names = ['期号', 'period', 'Period', '期次']
+        date_names = ['开奖日期', '日期', 'date', 'Date']
+        red_names = ['红1', '红球1', 'red1', '红球号码1']
+        blue_names = ['蓝球', 'blue', 'Blue', '蓝球号码']
+        pool_names = ['奖池奖金(元)', '奖池', 'pool_amount']
+        sales_names = ['总投注额(元)', '总投注额', '销量', 'total_sales']
+        
+        for col in df.columns:
+            col_str = str(col).strip()
+            if not period_col and any(name in col_str for name in period_names):
+                period_col = col
+            if not date_col and any(name in col_str for name in date_names):
+                date_col = col
+            if not blue_col and any(name in col_str for name in blue_names):
+                blue_col = col
+            if not pool_col and any(name in col_str for name in pool_names):
+                pool_col = col
+            if not sales_col and any(name in col_str for name in sales_names):
+                sales_col = col
+            for i in range(1, 7):
+                if any(name in col_str for name in [f'红{i}', f'红球{i}', f'red{i}']):
+                    red_cols.append(col)
+                    break
+        
+        # 如果按列名没找到，按位置（第1列期号，第2列日期，第3-8列红球，第9列蓝球）
+        if len(red_cols) != 6 and len(df.columns) >= 9:
+            period_col = df.columns[0]
+            date_col = df.columns[1] if len(df.columns) > 1 else None
+            red_cols = df.columns[2:8].tolist()
+            blue_col = df.columns[8] if len(df.columns) > 8 else None
+            if len(df.columns) > 9:
+                pool_col = df.columns[9]
+            if len(df.columns) > 14:
+                sales_col = df.columns[14]
+        
+        if len(red_cols) != 6:
+            st.error(f"无法识别红球列，找到{len(red_cols)}列，需要6列")
+            return None
+        
+        draws = []
+        for idx, row in df.iterrows():
+            try:
+                # 期号
+                period = row[period_col]
+                if pd.isna(period):
+                    continue
+                period = int(period) if str(period).isdigit() else str(period)
+                
+                # 日期
+                date = None
+                if date_col and pd.notna(row[date_col]):
+                    date_val = row[date_col]
+                    if isinstance(date_val, datetime):
+                        date = date_val.strftime('%Y-%m-%d')
+                    else:
+                        date = str(date_val).split()[0] if ' ' in str(date_val) else str(date_val)
+                
+                # 红球
+                reds = []
+                for col in red_cols[:6]:
+                    val = row[col]
+                    if pd.notna(val):
+                        reds.append(int(val))
+                
+                if len(reds) != 6:
+                    continue
+                reds = sorted(reds)
+                
+                # 蓝球
+                blue = 0
+                if blue_col and pd.notna(row[blue_col]):
+                    blue = int(row[blue_col])
+                else:
+                    continue
+                
+                # 奖池和销量
+                pool = int(row[pool_col]) if pool_col and pd.notna(row[pool_col]) else 0
+                sales = int(row[sales_col]) if sales_col and pd.notna(row[sales_col]) else 0
+                
+                draws.append({
+                    'period': period,
+                    'date': date,
+                    'reds': reds,
+                    'blue': blue,
+                    'pool': pool,
+                    'sales': sales,
+                    'prize1_count': 0,
+                    'prize1_amount': 0,
+                    'prize2_count': 0,
+                    'prize2_amount': 0
+                })
+            except Exception:
+                continue
+        
+        return draws if draws else None
+        
+    except Exception as e:
+        st.error(f"Excel解析错误: {e}")
+        return None
+      
 def show_admin_page():
-    """管理员页面 - 可编辑数据框"""
+    """管理员页面 - 可编辑数据框 + Excel上传"""
     st.subheader("📋 数据编辑器")
-    st.caption("格式：期号 日期 红1 红2 红3 红4 红5 红6 蓝球 奖池 一等奖注数 一等奖奖金 二等奖注数 二等奖奖金 销量")
+    
+    # 格式说明（带表头）
+    st.caption("格式说明（15列，Tab或空格分隔）：")
+    st.code("期号\t开奖日期\t红1\t红2\t红3\t红4\t红5\t红6\t蓝球\t奖池奖金(元)\t一等奖注数\t一等奖奖金(元)\t二等奖注数\t二等奖奖金(元)\t总投注额(元)")
     st.caption("支持Tab或空格分隔，可直接从Excel复制粘贴。最多显示100行，可滚动。")
     
     # 加载现有数据
     current_draws = st.session_state.get('draws_loaded', [])
     
-    # 生成显示文本（降序，最新在上，最多100行）
+    # 生成显示文本（带表头）
+    header = "期号\t开奖日期\t红1\t红2\t红3\t红4\t红5\t红6\t蓝球\t奖池奖金(元)\t一等奖注数\t一等奖奖金(元)\t二等奖注数\t二等奖奖金(元)\t总投注额(元)"
+    
     if current_draws:
         display_draws = sorted(current_draws, key=lambda x: x.get('period', 0), reverse=True)
         text_lines = [draw_to_text_line(d) for d in display_draws[:100]]
-        data_text = "\n".join(text_lines)
+        data_text = header + "\n" + "\n".join(text_lines)
     else:
-        data_text = ""
+        data_text = header + "\n"
     
     # 可编辑文本域
     edited_text = st.text_area(
-        "数据内容（可直接编辑）",
+        "数据内容（可直接编辑，第一行为表头）",
         value=data_text,
         height=400,
         key="data_editor",
-        help="Ctrl+A 全选，Delete 删除，粘贴新数据后点击保存"
+        help="第一行是表头，不要删除。Ctrl+A 全选，Delete 删除，粘贴新数据后点击保存"
     )
     
-    col1, col2, col3 = st.columns(3)
+    # 操作按钮
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         if st.button("📥 从数据库加载", type="primary", use_container_width=True):
             with st.spinner("加载中..."):
@@ -448,17 +575,19 @@ def show_admin_page():
         if st.button("💾 保存到数据库", type="primary", use_container_width=True):
             with st.spinner("保存中..."):
                 lines = edited_text.strip().split('\n')
+                # 跳过第一行表头
+                data_lines = lines[1:] if len(lines) > 1 else []
                 new_draws = []
                 errors = []
                 
-                for i, line in enumerate(lines):
+                for i, line in enumerate(data_lines, 2):  # 从第2行开始计数
                     if not line.strip():
                         continue
-                    draw = text_line_to_draw(line, i+1)
+                    draw = text_line_to_draw(line, i)
                     if draw:
                         new_draws.append(draw)
                     else:
-                        errors.append(f"行{i+1}: 格式错误")
+                        errors.append(f"行{i}: 格式错误")
                 
                 if errors:
                     for err in errors[:5]:
@@ -476,13 +605,62 @@ def show_admin_page():
     
     with col3:
         if st.button("🗑️ 清空编辑框", use_container_width=True):
-            st.session_state['data_editor'] = ""
+            # 清空后保留表头
+            st.session_state['data_editor'] = header + "\n"
             st.rerun()
     
-    # 显示统计
-    if current_draws:
-        st.info(f"当前数据库：{len(current_draws)} 期数据，范围：{current_draws[0].get('period')} - {current_draws[-1].get('period')}")
-
+    with col4:
+        if st.button("📊 查看统计", use_container_width=True):
+            if current_draws:
+                st.info(f"当前数据库：{len(current_draws)} 期数据，范围：{current_draws[0].get('period')} - {current_draws[-1].get('period')}")
+            else:
+                st.warning("数据库暂无数据")
+    
+    st.markdown("---")
+    st.subheader("📎 Excel文件上传")
+    st.caption("支持 .xlsx 或 .xls 格式，第一行为列标题，第二行开始为数据")
+    
+    # 文件上传
+    uploaded_file = st.file_uploader(
+        "选择Excel文件",
+        type=['xlsx', 'xls'],
+        key="excel_uploader",
+        help="上传Excel文件，格式与上方表头一致"
+    )
+    
+    if uploaded_file is not None:
+        with st.spinner("正在解析Excel文件..."):
+            excel_draws = parse_excel_file(uploaded_file)
+            if excel_draws and len(excel_draws) > 0:
+                st.success(f"✅ 成功解析 {len(excel_draws)} 期数据")
+                
+                # 显示预览
+                preview_df = pd.DataFrame([{
+                    '期号': d['period'],
+                    '日期': d.get('date', ''),
+                    '红球': ','.join(str(r) for r in d['reds']),
+                    '蓝球': d['blue'],
+                    '奖池': d.get('pool', 0),
+                    '销量': d.get('sales', 0)
+                } for d in excel_draws[:10]])
+                st.dataframe(preview_df, use_container_width=True, hide_index=True)
+                
+                # 确认保存按钮
+                col_confirm, col_cancel = st.columns(2)
+                with col_confirm:
+                    if st.button("✅ 确认保存到数据库", type="primary"):
+                        excel_draws = fill_missing_with_history(excel_draws)
+                        excel_draws.sort(key=lambda x: x.get('period', 0))
+                        saved = save_draws_to_supabase(excel_draws)
+                        if saved > 0:
+                            st.session_state['draws_loaded'] = excel_draws
+                            st.success(f"保存 {saved} 期数据成功！")
+                            st.rerun()
+                with col_cancel:
+                    if st.button("❌ 取消"):
+                        st.rerun()
+            else:
+                st.error("解析失败，请检查文件格式")
 # ==================== 初始化Session State ====================
 if 'admin_logged_in' not in st.session_state:
     st.session_state['admin_logged_in'] = False
