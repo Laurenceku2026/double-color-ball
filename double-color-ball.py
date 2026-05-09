@@ -2525,18 +2525,15 @@ with st.sidebar:
     with st.expander("📖 五种AI算法对比（动态回测）"):
         col1, col2 = st.columns([3, 1])
         with col1:
-            backtest_periods = st.slider(
-                "回测期数",
-                min_value=10,
-                max_value=min(200, len(draws) - 10) if len(draws) > 10 else 30,
-                value=30,
-                step=5,
-                key="sidebar_backtest_periods"
-            )
-        with col2:
-            if st.button("🔄 刷新ROI", use_container_width=True, key="refresh_roi_btn"):
-                t.success("✅ ROI已更新")
-        
+                backtest_periods = st.slider(
+        "回测期数",
+        min_value=10,
+        max_value=min(200, len(draws)-10) if len(draws) > 10 else 30,
+        value=30,
+        step=5,
+        key="sidebar_backtest_periods"
+    )
+         
         if len(draws) >= backtest_periods:
             try:
                 roi_results = {}
