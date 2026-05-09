@@ -630,6 +630,7 @@ def show_admin_page():
     
     # 加载现有数据
     current_draws = st.session_state.get('draws_loaded', [])
+    st.info(f"current_draws 长度: {len(current_draws)}")
     
     # 转换为DataFrame（不带选择列）
     if current_draws:
