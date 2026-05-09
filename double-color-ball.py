@@ -929,7 +929,7 @@ def show_admin_page():
             else:
                 st.info("请勾选确认框后再次点击保存")
     
-        with col5:
+    with col5:
         if st.button("➕ 仅新增更新", type="primary", use_container_width=True, key="upsert_btn"):
             # 使用 current_df 而不是 df
             save_df = current_df.drop(columns=['选择'], errors='ignore')
