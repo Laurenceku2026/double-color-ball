@@ -406,6 +406,7 @@ def admin_logout():
         st.rerun()
 # ==================== Excel解析器 ====================
 def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
+    st.write("读取到的列名:", df.columns.tolist())
     """解析用户上传的Excel文件"""
     try:
         # 尝试导入 openpyxl
