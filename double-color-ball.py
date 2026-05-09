@@ -836,6 +836,7 @@ def show_admin_page():
     }
     
     # 显示可编辑表格
+    st.info(f"📊 DataFrame 行数: {len(df)} 条")
     try:
         edited_df = st.data_editor(
             df,
