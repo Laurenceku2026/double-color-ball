@@ -406,7 +406,6 @@ def admin_logout():
         st.rerun()
 # ==================== Excel解析器 ====================
 def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
-    st.write("读取到的列名:", df.columns.tolist())
     """解析用户上传的Excel文件"""
     try:
         # 尝试导入 openpyxl
@@ -417,7 +416,7 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
             return None
         
         df = pd.read_excel(uploaded_file, sheet_name=0)
-        
+        st.write("读取到的列名:", df.columns.tolist())
         # 尝试识别列名
         period_col = None
         date_col = None
