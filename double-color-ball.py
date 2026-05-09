@@ -665,17 +665,17 @@ def show_admin_page():
         # 空DataFrame，只有列名
         df = pd.DataFrame(columns=columns)
     
-    # 配置列类型（简化版，避免兼容问题）
     # 配置列类型（所有列都用文本列，避免类型兼容问题）
-column_config = {}
-for col in columns:
-    if col == "开奖日期":
-        # 使用文本列而不是日期列，因为数据是字符串格式
-        column_config[col] = st.column_config.TextColumn("开奖日期")
-    elif col in ["期号", "红1", "红2", "红3", "红4", "红5", "红6", "蓝球", "一等奖注数", "二等奖注数"]:
-        column_config[col] = st.column_config.NumberColumn(col, step=1)
-    elif col in ["奖池奖金(元)", "一等奖奖金(元)", "二等奖奖金(元)", "总投注额(元)"]:
-        column_config[col] = st.column_config.NumberColumn(col, format="%d")
+        # 配置列类型（修正版：日期列使用文本列）
+    column_config = {}
+    for col in columns:
+        if col == "开奖日期":
+            # 使用文本列，因为数据是字符串格式如 "2026-05-03"
+            column_config[col] = st.column_config.TextColumn("开奖日期")
+        elif col in ["期号", "红1", "红2", "红3", "红4", "红5", "红6", "蓝球", "一等奖注数", "二等奖注数"]:
+            column_config[col] = st.column_config.NumberColumn(col, step=1)
+        elif col in ["奖池奖金(元)", "一等奖奖金(元)", "二等奖奖金(元)", "总投注额(元)"]:
+            column_config[col] = st.column_config.NumberColumn(col, format="%d")
     
     # 显示可编辑表格
     try:
