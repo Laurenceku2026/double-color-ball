@@ -2801,7 +2801,7 @@ use_seed = st.checkbox("使用随机种子", value=False, key="use_seed")
 
 if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
     if use_seed:
-        # 合并日期和时间
+        # 合并日期和时间（这里需要8个空格缩进）
         seed_datetime = datetime.combine(seed_date, seed_time)
         seed_val = int(seed_datetime.timestamp())
         random.seed(seed_val)
@@ -2812,13 +2812,18 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
         np.random.seed()
     
     with st.spinner(f"正在使用 {ai_model} 生成投注..."):
+        
         if "综合模式" in ai_model:
-    bets = BetGenerator.generate_ensemble(draws, num_bets)
-else:
-    method_name = ai_model.split(":")[0] if ":" in ai_model else ai_model
-    bets = BetGenerator.generate(method_name, draws, num_bets)
+            # 这里需要12个空格缩进（因为已经在 with 块内）
+            bets = BetGenerator.generate_ensemble(draws, num_bets)
+        else:
+            # 这里也需要12个空格缩进
+            method_name = ai_model.split(":")[0] if ":" in ai_model else ai_model
+            bets = BetGenerator.generate(method_name, draws, num_bets)
+        
         st.session_state['generated_bets'] = bets
         st.session_state['model_used'] = ai_model
+    
     st.success(f"✅ 使用 {ai_model} 生成 {len(bets)} 组投注")
 
 # 显示生成的投注
