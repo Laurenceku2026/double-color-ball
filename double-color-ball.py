@@ -1198,6 +1198,71 @@ if not draws or len(draws) < 5:
     """, unsafe_allow_html=True)
     st.stop()
 
+# ==================== ROI回测函数 ====================
+def backtest_roi(draws: List[Dict], method: str, num_bets: int = 4, lookback: int = 50) -> Dict:
+    """回测指定方法的ROI"""
+    if len(draws) < lookback + 10:
+        return {"roi": 0, "total_cost": 0, "total_prize": 0, "net": 0, "win_rate": 0}
+    
+    total_cost = 0
+    total_prize = 0
+    win_count = 0
+    prize_breakdown = {"first": 0, "second": 0, "third": 0, "fourth": 0, "fifth": 0, "sixth": 0, "fuyun": 0}
+    
+    for i in range(lookback, len(draws)):
+        historical = draws[:i]   # 👈 修复：使用所有历史数据
+        actual = draws[i]
+        
+        bets = BetGenerator.generate(method, historical, num_bets)
+        
+        period_cost = num_bets * 14
+        period_prize = 0
+        
+        for bet in bets:
+            red_matches = len(set(bet['reds']) & set(actual['reds'])) if actual.get('reds') else 0
+            blue_match = (bet['blue'] == actual.get('blue', 0)) if actual.get('blue') else False
+            
+            if red_matches == 6 and blue_match:
+                period_prize += 5000000
+                prize_breakdown["first"] += 1
+            elif red_matches == 6:
+                period_prize += 500000
+                prize_breakdown["second"] += 1
+            elif red_matches == 5 and blue_match:
+                period_prize += 3000
+                prize_breakdown["third"] += 1
+            elif red_matches == 5 or (red_matches == 4 and blue_match):
+                period_prize += 200
+                prize_breakdown["fourth"] += 1
+            elif red_matches == 4 or (red_matches == 3 and blue_match):
+                period_prize += 10
+                prize_breakdown["fifth"] += 1
+            elif blue_match:
+                period_prize += 5
+                prize_breakdown["sixth"] += 1
+            elif red_matches == 3:
+                period_prize += 5
+                prize_breakdown["fuyun"] += 1
+        
+        total_cost += period_cost
+        total_prize += period_prize
+        
+        if period_prize > 0:
+            win_count += 1
+    
+    net = total_prize - total_cost
+    roi = (net / total_cost) * 100 if total_cost > 0 else 0
+    win_rate = (win_count / lookback) * 100 if lookback > 0 else 0
+    
+    return {
+        "roi": roi,
+        "total_cost": total_cost,
+        "total_prize": total_prize,
+        "net": net,
+        "win_rate": win_rate,
+        "periods": lookback,
+        "prize_breakdown": prize_breakdown
+    }
 # ==================== 侧边栏 ====================
 # ==================== 侧边栏 ====================
 with st.sidebar:
@@ -2474,73 +2539,6 @@ class BetGenerator:
             })
         
         return bets
-
-# ==================== ROI回测函数 ====================
-def backtest_roi(draws: List[Dict], method: str, num_bets: int = 4, lookback: int = 50) -> Dict:
-    """回测指定方法的ROI"""
-    if len(draws) < lookback + 10:
-        return {"roi": 0, "total_cost": 0, "total_prize": 0, "net": 0, "win_rate": 0}
-    
-    total_cost = 0
-    total_prize = 0
-    win_count = 0
-    prize_breakdown = {"first": 0, "second": 0, "third": 0, "fourth": 0, "fifth": 0, "sixth": 0, "fuyun": 0}
-    
-    for i in range(lookback, len(draws)):
-        historical = draws[:i]   # 👈 修复：使用所有历史数据
-        actual = draws[i]
-        
-        bets = BetGenerator.generate(method, historical, num_bets)
-        
-        period_cost = num_bets * 14
-        period_prize = 0
-        
-        for bet in bets:
-            red_matches = len(set(bet['reds']) & set(actual['reds'])) if actual.get('reds') else 0
-            blue_match = (bet['blue'] == actual.get('blue', 0)) if actual.get('blue') else False
-            
-            if red_matches == 6 and blue_match:
-                period_prize += 5000000
-                prize_breakdown["first"] += 1
-            elif red_matches == 6:
-                period_prize += 500000
-                prize_breakdown["second"] += 1
-            elif red_matches == 5 and blue_match:
-                period_prize += 3000
-                prize_breakdown["third"] += 1
-            elif red_matches == 5 or (red_matches == 4 and blue_match):
-                period_prize += 200
-                prize_breakdown["fourth"] += 1
-            elif red_matches == 4 or (red_matches == 3 and blue_match):
-                period_prize += 10
-                prize_breakdown["fifth"] += 1
-            elif blue_match:
-                period_prize += 5
-                prize_breakdown["sixth"] += 1
-            elif red_matches == 3:
-                period_prize += 5
-                prize_breakdown["fuyun"] += 1
-        
-        total_cost += period_cost
-        total_prize += period_prize
-        
-        if period_prize > 0:
-            win_count += 1
-    
-    net = total_prize - total_cost
-    roi = (net / total_cost) * 100 if total_cost > 0 else 0
-    win_rate = (win_count / lookback) * 100 if lookback > 0 else 0
-    
-    return {
-        "roi": roi,
-        "total_cost": total_cost,
-        "total_prize": total_prize,
-        "net": net,
-        "win_rate": win_rate,
-        "periods": lookback,
-        "prize_breakdown": prize_breakdown
-    }
-
 
 print("第3部分加载完成")
 
