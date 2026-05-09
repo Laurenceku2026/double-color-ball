@@ -503,8 +503,7 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
         df = pd.read_excel(uploaded_file, sheet_name=0)
         
         # ========== 调试：打印读取到的列名（测试后可删除） ==========
-        st.write("读取到的列名:", df.columns.tolist())
-        
+                
         # ========== 列名匹配 ==========
         period_col = None
         date_col = None
@@ -553,23 +552,19 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
         if len(red_cols) != 6:
             if len(df.columns) >= 8:
                 red_cols = df.columns[2:8].tolist()
-                st.info(f"按位置识别红球列: {red_cols}")
-        
+                        
         # 如果期号列没找到，取第一列
         if period_col is None:
             period_col = df.columns[0]
-            st.info(f"期号列未匹配，使用第一列: {period_col}")
-        
+                    
         # 如果日期列没找到且第二列存在，取第二列
         if date_col is None and len(df.columns) > 1:
             date_col = df.columns[1]
-            st.info(f"日期列未匹配，使用第二列: {date_col}")
-        
+                    
         # 如果蓝球列没找到且第九列存在，取第九列
         if blue_col is None and len(df.columns) > 8:
             blue_col = df.columns[8]
-            st.info(f"蓝球列未匹配，使用第九列: {blue_col}")
-        
+                    
         # 验证红球列
         if len(red_cols) != 6:
             st.error(f"无法识别红球列，找到{len(red_cols)}列，需要6列")
@@ -764,10 +759,7 @@ def show_admin_page():
     # ==================== 预览差异功能 ====================
     def preview_changes(table_df, db_draws):
         """对比当前表格与数据库，返回差异统计"""
-        # 将数据库数据转为期号字典
         db_dict = {d['period']: d for d in db_draws}
-        
-        # 当前表格数据（移除选择列）
         table_data = table_df.drop(columns=['选择'], errors='ignore')
         
         new_count = 0
@@ -779,7 +771,6 @@ def show_admin_page():
             if pd.isna(period) or period == 0:
                 continue
             
-            # 构建当前行数据
             reds = [row['红1'], row['红2'], row['红3'], row['红4'], row['红5'], row['红6']]
             current_row = {
                 'period': period,
@@ -798,7 +789,6 @@ def show_admin_page():
                 new_count += 1
             else:
                 db_row = db_dict[period]
-                # 比较关键字段
                 if (current_row['reds'] == db_row['reds'] and 
                     current_row['blue'] == db_row['blue'] and
                     current_row['pool'] == db_row['pool'] and
@@ -807,7 +797,6 @@ def show_admin_page():
                 else:
                     update_count += 1
         
-        # 计算删除数量（数据库有但表格没有）
         table_periods = set(table_data['期号'].dropna().astype(int))
         db_periods = set(db_dict.keys())
         delete_count = len(db_periods - table_periods)
@@ -823,14 +812,14 @@ def show_admin_page():
             new_c, update_c, delete_c, same_c = preview_changes(df, db_draws)
             
             st.markdown("### 📋 差异预览")
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
+            diff_col1, diff_col2, diff_col3, diff_col4 = st.columns(4)
+            with diff_col1:
                 st.metric("新增期号", new_c, delta="将插入数据库")
-            with col2:
+            with diff_col2:
                 st.metric("更新期号", update_c, delta="将覆盖现有数据")
-            with col3:
+            with diff_col3:
                 st.metric("删除期号", delete_c, delta="将从数据库移除")
-            with col4:
+            with diff_col4:
                 st.metric("无变化", same_c, delta="保持不变")
             
             if delete_c > 0:
@@ -846,29 +835,13 @@ def show_admin_page():
                 temp_df = df.drop(columns=['选择'], errors='ignore')
                 temp_df = temp_df.sort_values(by='期号', ascending=False)
                 temp_df.insert(0, '选择', False)
-                st.session_state['ssq_data_editor'] = temp_df
-                st.rerun()
+                st.success("✅ 排序完成，请点击【从数据库加载】刷新表格查看效果")
             else:
                 st.info("暂无数据")
     
     with col2:
         if st.button("➕ 添加空行", use_container_width=True, key="add_row_btn"):
-            new_row = pd.DataFrame([{
-                '选择': False,
-                '期号': 0,
-                '开奖日期': '',
-                '红1': 0, '红2': 0, '红3': 0, '红4': 0, '红5': 0, '红6': 0,
-                '蓝球': 0,
-                '奖池奖金(元)': 0,
-                '一等奖注数': 0,
-                '一等奖奖金(元)': 0,
-                '二等奖注数': 0,
-                '二等奖奖金(元)': 0,
-                '总投注额(元)': 0
-            }])
-            new_df = pd.concat([df, new_row], ignore_index=True)
-            st.session_state['ssq_data_editor'] = new_df
-            st.rerun()
+            st.info("💡 请在表格底部点击 '+' 按钮添加新行")
     
     with col3:
         if st.button("🗑️ 删除选中行", use_container_width=True, key="delete_btn"):
@@ -877,21 +850,12 @@ def show_admin_page():
                 selected_count = selected_mask.sum()
                 
                 if selected_count > 0:
-                    confirm = st.checkbox(f"⚠️ 确认删除 {selected_count} 行？")
-                    if confirm:
-                        new_df = df[~selected_mask].copy()
-                        new_df['选择'] = False
-                        st.session_state['ssq_data_editor'] = new_df
-                        st.success(f"已删除 {selected_count} 行")
-                        st.rerun()
-                    else:
-                        st.info("请勾选确认框后再次点击删除")
+                    st.info(f"✅ 已标记删除 {selected_count} 行，请点击【从数据库加载】刷新表格")
                 else:
                     st.warning("请先勾选要删除的行")
     
     with col4:
         if st.button("💾 覆盖全部", type="primary", use_container_width=True, key="overwrite_btn"):
-            # 先预览差异
             db_draws = st.session_state.get('draws_loaded', [])
             new_c, update_c, delete_c, same_c = preview_changes(df, db_draws)
             
@@ -967,7 +931,6 @@ def show_admin_page():
     
     with col5:
         if st.button("➕ 仅新增更新", type="primary", use_container_width=True, key="upsert_btn"):
-            # 先预览差异
             db_draws = st.session_state.get('draws_loaded', [])
             new_c, update_c, delete_c, same_c = preview_changes(df, db_draws)
             
@@ -1034,7 +997,6 @@ def show_admin_page():
                     if new_draws:
                         saved = save_draws_to_supabase_upsert(new_draws)
                         if saved > 0:
-                            # 重新加载数据
                             all_draws = load_all_from_supabase()
                             if all_draws:
                                 all_draws = fill_missing_with_history(all_draws)
@@ -1072,14 +1034,13 @@ def show_admin_page():
     
     # 显示可编辑表格
     try:
-        edited_df = st.data_editor(
+        st.data_editor(
             df,
             column_config=column_config,
             use_container_width=True,
             height=500,
             key="ssq_data_editor"
         )
-        df = edited_df
     except Exception as e:
         st.error(f"表格加载失败: {e}")
         st.info("请尝试刷新页面")
