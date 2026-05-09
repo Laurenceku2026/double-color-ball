@@ -825,6 +825,25 @@ def show_admin_page():
             if delete_c > 0:
                 st.warning(f"⚠️ 有 {delete_c} 期数据在表格中不存在，保存时将被删除（仅覆盖全部模式）")
     
+    # 显示可编辑表格
+    try:
+        edited_df = st.data_editor(
+            df,
+            column_config=column_config,
+            use_container_width=True,
+            height=500,
+            num_rows="dynamic",
+            key="ssq_data_editor"
+        )
+        # 保存当前编辑后的数据到 session_state
+        st.session_state['current_edited_df'] = edited_df
+    except Exception as e:
+        st.error(f"表格加载失败: {e}")
+        st.info("请尝试刷新页面")
+        return
+    
+    # 获取当前有效的数据（优先使用编辑后的）
+    current_df = st.session_state.get('current_edited_df', df)
     # ==================== 按钮区域 ====================
     st.markdown("---")
     col1, col2, col3, col4, col5, col6 = st.columns(6)
@@ -1040,26 +1059,7 @@ def show_admin_page():
         "二等奖注数": st.column_config.NumberColumn("二等奖注数", step=1),
     }
     
-    # 显示可编辑表格
-    try:
-        edited_df = st.data_editor(
-            df,
-            column_config=column_config,
-            use_container_width=True,
-            height=500,
-            num_rows="dynamic",
-            key="ssq_data_editor"
-        )
-        # 保存当前编辑后的数据到 session_state
-        st.session_state['current_edited_df'] = edited_df
-    except Exception as e:
-        st.error(f"表格加载失败: {e}")
-        st.info("请尝试刷新页面")
-        return
-    
-    # 获取当前有效的数据（优先使用编辑后的）
-    current_df = st.session_state.get('current_edited_df', df)
-    
+       
     # ==================== Excel上传区域 ====================
     st.markdown("---")
     st.subheader("📎 Excel文件上传（完整15列）")
