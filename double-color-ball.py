@@ -406,7 +406,7 @@ def admin_logout():
         st.rerun()
 # ==================== Excel解析器 ====================
 def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
-    """解析用户上传的Excel文件"""
+    """解析用户上传的Excel文件 - 完整15列"""
     try:
         # 尝试导入 openpyxl
         try:
@@ -416,63 +416,116 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
             return None
         
         df = pd.read_excel(uploaded_file, sheet_name=0)
+        
+        # ========== 调试：打印读取到的列名（测试后可删除） ==========
         st.write("读取到的列名:", df.columns.tolist())
-        # 尝试识别列名
+        
+        # ========== 列名匹配 ==========
         period_col = None
         date_col = None
         red_cols = []
         blue_col = None
         pool_col = None
         sales_col = None
+        prize1_count_col = None
+        prize1_amount_col = None
+        prize2_count_col = None
+        prize2_amount_col = None
         
-        # 常见列名映射
-        period_names = ['期号', 'period', 'Period', '期次']
-        date_names = ['开奖日期', '日期', 'date', 'Date']
-        red_names = ['红1', '红球1', 'red1', '红球号码1']
-        blue_names = ['蓝球', 'blue', 'Blue', '蓝球号码']
-        pool_names = ['奖池奖金(元)', '奖池', 'pool_amount']
-        sales_names = ['总投注额(元)', '总投注额', '销量', 'total_sales']
-        
+        # 遍历所有列，匹配列名
         for col in df.columns:
             col_str = str(col).strip()
-            if not period_col and any(name in col_str for name in period_names):
+            
+            if '期号' in col_str:
                 period_col = col
-            if not date_col and any(name in col_str for name in date_names):
+            elif '开奖日期' in col_str or '日期' in col_str:
                 date_col = col
-            if not blue_col and any(name in col_str for name in blue_names):
+            elif '红1' in col_str or '红球1' in col_str:
+                # 红球列：收集红1到红6
+                for i in range(1, 7):
+                    red_check = f'红{i}'
+                    if red_check in df.columns:
+                        if red_check not in red_cols:
+                            red_cols.append(red_check)
+                    elif f'红球{i}' in str(df.columns.tolist()):
+                        pass
+            elif '蓝球' in col_str:
                 blue_col = col
-            if not pool_col and any(name in col_str for name in pool_names):
+            elif '奖池' in col_str and '奖金' in col_str:
                 pool_col = col
-            if not sales_col and any(name in col_str for name in sales_names):
+            elif '总投注额' in col_str or '总投注金额' in col_str:
                 sales_col = col
-            for i in range(1, 7):
-                if any(name in col_str for name in [f'红{i}', f'红球{i}', f'red{i}']):
-                    red_cols.append(col)
-                    break
+            elif '一等奖注数' in col_str:
+                prize1_count_col = col
+            elif '一等奖奖金' in col_str:
+                prize1_amount_col = col
+            elif '二等奖注数' in col_str:
+                prize2_count_col = col
+            elif '二等奖奖金' in col_str:
+                prize2_amount_col = col
         
-        # 如果按列名没找到，按位置（第1列期号，第2列日期，第3-8列红球，第9列蓝球）
-        if len(red_cols) != 6 and len(df.columns) >= 9:
+        # 如果按列名没找到红球列，按位置（第3-8列）
+        if len(red_cols) != 6:
+            if len(df.columns) >= 8:
+                red_cols = df.columns[2:8].tolist()
+                st.info(f"按位置识别红球列: {red_cols}")
+        
+        # 如果期号列没找到，取第一列
+        if period_col is None:
             period_col = df.columns[0]
-            date_col = df.columns[1] if len(df.columns) > 1 else None
-            red_cols = df.columns[2:8].tolist()
-            blue_col = df.columns[8] if len(df.columns) > 8 else None
-            if len(df.columns) > 9:
-                pool_col = df.columns[9]
-            if len(df.columns) > 14:
-                sales_col = df.columns[14]
+            st.info(f"期号列未匹配，使用第一列: {period_col}")
         
+        # 如果日期列没找到且第二列存在，取第二列
+        if date_col is None and len(df.columns) > 1:
+            date_col = df.columns[1]
+            st.info(f"日期列未匹配，使用第二列: {date_col}")
+        
+        # 如果蓝球列没找到且第九列存在，取第九列
+        if blue_col is None and len(df.columns) > 8:
+            blue_col = df.columns[8]
+            st.info(f"蓝球列未匹配，使用第九列: {blue_col}")
+        
+        # 验证红球列
         if len(red_cols) != 6:
             st.error(f"无法识别红球列，找到{len(red_cols)}列，需要6列")
+            st.info(f"找到的红球列: {red_cols}")
             return None
         
+        # ========== 辅助函数：安全转换数字 ==========
+        def safe_int_convert(val):
+            """安全转换为整数，处理文本格式、逗号、空格等"""
+            if pd.isna(val):
+                return 0
+            if isinstance(val, (int, float)):
+                return int(val)
+            # 转为字符串并清理
+            val_str = str(val).strip()
+            # 去除千位分隔符逗号
+            val_str = val_str.replace(',', '')
+            # 去除空格
+            val_str = val_str.replace(' ', '')
+            # 去除换行符
+            val_str = val_str.replace('\n', '').replace('\r', '')
+            if val_str == '' or val_str == '0':
+                return 0
+            try:
+                return int(float(val_str))
+            except:
+                return 0
+        
+        # ========== 解析数据行 ==========
         draws = []
+        error_count = 0
+        skipped_count = 0
+        
         for idx, row in df.iterrows():
             try:
                 # 期号
-                period = row[period_col]
-                if pd.isna(period):
+                period_val = row[period_col]
+                if pd.isna(period_val):
+                    skipped_count += 1
                     continue
-                period = int(period) if str(period).isdigit() else str(period)
+                period = int(period_val) if str(period_val).isdigit() else str(period_val)
                 
                 # 日期
                 date = None
@@ -491,19 +544,44 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
                         reds.append(int(val))
                 
                 if len(reds) != 6:
+                    error_count += 1
                     continue
                 reds = sorted(reds)
                 
                 # 蓝球
                 blue = 0
                 if blue_col and pd.notna(row[blue_col]):
-                    blue = int(row[blue_col])
-                else:
-                    continue
+                    blue = safe_int_convert(row[blue_col])
                 
-                # 奖池和销量
-                pool = int(row[pool_col]) if pool_col and pd.notna(row[pool_col]) else 0
-                sales = int(row[sales_col]) if sales_col and pd.notna(row[sales_col]) else 0
+                # 奖池
+                pool = 0
+                if pool_col and pd.notna(row[pool_col]):
+                    pool = safe_int_convert(row[pool_col])
+                
+                # 销量
+                sales = 0
+                if sales_col and pd.notna(row[sales_col]):
+                    sales = safe_int_convert(row[sales_col])
+                
+                # 一等奖注数
+                prize1_count = 0
+                if prize1_count_col and pd.notna(row[prize1_count_col]):
+                    prize1_count = safe_int_convert(row[prize1_count_col])
+                
+                # 一等奖奖金
+                prize1_amount = 0
+                if prize1_amount_col and pd.notna(row[prize1_amount_col]):
+                    prize1_amount = safe_int_convert(row[prize1_amount_col])
+                
+                # 二等奖注数
+                prize2_count = 0
+                if prize2_count_col and pd.notna(row[prize2_count_col]):
+                    prize2_count = safe_int_convert(row[prize2_count_col])
+                
+                # 二等奖奖金
+                prize2_amount = 0
+                if prize2_amount_col and pd.notna(row[prize2_amount_col]):
+                    prize2_amount = safe_int_convert(row[prize2_amount_col])
                 
                 draws.append({
                     'period': period,
@@ -512,112 +590,31 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
                     'blue': blue,
                     'pool': pool,
                     'sales': sales,
-                    'prize1_count': 0,
-                    'prize1_amount': 0,
-                    'prize2_count': 0,
-                    'prize2_amount': 0
+                    'prize1_count': prize1_count,
+                    'prize1_amount': prize1_amount,
+                    'prize2_count': prize2_count,
+                    'prize2_amount': prize2_amount
                 })
-            except Exception:
+                
+            except Exception as e:
+                error_count += 1
                 continue
         
-        return draws if draws else None
+        # ========== 显示解析统计 ==========
+        if draws:
+            st.success(f"成功解析 {len(draws)} 期数据")
+            if skipped_count > 0:
+                st.warning(f"跳过 {skipped_count} 行（期号为空）")
+            if error_count > 0:
+                st.warning(f"跳过 {error_count} 行（数据格式错误）")
+            return draws
+        else:
+            st.error("未找到有效数据")
+            return None
         
     except Exception as e:
         st.error(f"Excel解析错误: {e}")
         return None
-# ==================== 文本解析器 ====================
-def parse_draws_from_text(text: str) -> List[Dict]:
-    """解析粘贴的文本数据，支持多格式自动检测"""
-    lines = text.strip().split('\n')
-    draws = []
-    error_count = 0
-    
-    for line_idx, line in enumerate(lines):
-        if not line.strip():
-            continue
-        
-        # 自动检测分隔符：优先Tab，否则空格
-        if '\t' in line:
-            parts = line.split('\t')
-        else:
-            parts = line.split()
-        
-        if len(parts) < 8:
-            error_count += 1
-            continue
-        
-        try:
-            # 期号
-            period_str = parts[0]
-            period = int(period_str) if period_str.isdigit() else period_str
-            
-            # 日期（第2列，可选）
-            date = None
-            start_idx = 1
-            if len(parts) > 8 and ('-' in parts[1] or '/' in parts[1]):
-                date = parts[1]
-                start_idx = 2
-            
-            # 红球（6个）
-            reds = []
-            for i in range(start_idx, start_idx + 6):
-                if i >= len(parts):
-                    break
-                val = parts[i]
-                if '.' in str(val):
-                    val = val.split('.')[0]
-                reds.append(int(val))
-            
-            if len(reds) != 6:
-                error_count += 1
-                continue
-            reds = sorted(reds)
-            
-            # 蓝球
-            blue_idx = start_idx + 6
-            if blue_idx >= len(parts):
-                error_count += 1
-                continue
-            blue = int(float(parts[blue_idx]))
-            
-            # 奖池和销量（可选）
-            pool = 0
-            sales = 0
-            if len(parts) > blue_idx + 1:
-                pool_str = parts[blue_idx + 1].replace(',', '')
-                if pool_str.isdigit():
-                    pool = int(pool_str)
-            if len(parts) > blue_idx + 7:
-                sales_str = parts[-1].replace(',', '')
-                if sales_str.isdigit():
-                    sales = int(sales_str)
-            
-            draws.append({
-                'period': period,
-                'date': date,
-                'reds': reds,
-                'blue': blue,
-                'pool': pool,
-                'sales': sales,
-                'prize1_count': 0,
-                'prize1_amount': 0,
-                'prize2_count': 0,
-                'prize2_amount': 0
-            })
-            
-        except (ValueError, IndexError):
-            error_count += 1
-            continue
-    
-    if draws:
-        if error_count > 0:
-            st.warning(f"成功解析 {len(draws)} 期，跳过 {error_count} 行格式错误")
-        else:
-            st.success(f"成功解析 {len(draws)} 期数据")
-    else:
-        st.error("未解析到任何数据，请检查格式")
-    
-    return draws
 
 def show_admin_page():
     """管理员页面 - 可编辑表格 + 复选框删除 + 按钮在表格上方"""
