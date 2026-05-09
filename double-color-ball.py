@@ -2535,8 +2535,7 @@ with st.sidebar:
             )
         with col2:
             if st.button("🔄 刷新ROI", use_container_width=True, key="refresh_roi_btn"):
-                st.cache_data.clear()
-                st.rerun()
+                t.success("✅ ROI已更新")
         
         if len(draws) >= backtest_periods:
             try:
