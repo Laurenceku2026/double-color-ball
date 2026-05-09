@@ -697,36 +697,21 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
         return None
 
 def show_admin_page():
-    """管理员页面 - 可编辑表格 + 两个保存按钮 + 预览差异"""
+    """管理员页面 - 可编辑表格（使用 st.form 确保数据完整性）"""
     
     st.subheader("📋 数据编辑器")
-    st.caption("💡 操作步骤：1. 编辑表格（双击单元格）→ 2. 点击【刷新预览】→ 3. 点击【保存】")
+    st.caption("💡 双击单元格编辑 | 表格底部有 '+' 按钮添加新行 | 编辑完成后点击【保存】")
     
-    # 定义固定列名（15列，与Supabase表结构对齐）
+    # 定义固定列名（15列）
     columns = [
-        "选择", "期号", "开奖日期", "红1", "红2", "红3", "红4", "红5", "红6", "蓝球",
+        "期号", "开奖日期", "红1", "红2", "红3", "红4", "红5", "红6", "蓝球",
         "奖池奖金(元)", "一等奖注数", "一等奖奖金(元)", "二等奖注数", "二等奖奖金(元)", "总投注额(元)"
     ]
     
-    # 刷新数据按钮（从数据库重新加载）
-    col_refresh, _ = st.columns([1, 5])
-    with col_refresh:
-        if st.button("📥 从数据库加载", use_container_width=True):
-            with st.spinner("重新加载中..."):
-                draws = load_all_from_supabase()
-                if draws:
-                    draws = fill_missing_with_history(draws)
-                    st.session_state['draws_loaded'] = draws
-                    # 清除编辑器缓存
-                    st.session_state.pop('ssq_data_editor', None)
-                    st.success(f"加载 {len(draws)} 期数据")
-                    st.rerun()
-    
     # 加载现有数据
     current_draws = st.session_state.get('draws_loaded', [])
-    st.info(f"📊 当前数据量: {len(current_draws)} 期")
     
-    # ==================== 构建初始DataFrame ====================
+    # 构建 DataFrame
     if current_draws:
         display_draws = sorted(current_draws, key=lambda x: x.get('period', 0), reverse=True)
         data_rows = []
@@ -751,13 +736,11 @@ def show_admin_page():
             }
             data_rows.append(row)
         df = pd.DataFrame(data_rows)
-        df.insert(0, '选择', False)
     else:
-        df = pd.DataFrame(columns=['选择'] + columns[1:])
+        df = pd.DataFrame(columns=columns)
     
-    # ==================== 配置列类型 ====================
+    # 配置列类型
     column_config = {
-        "选择": st.column_config.CheckboxColumn("选择", help="勾选要删除的行"),
         "开奖日期": st.column_config.TextColumn("开奖日期"),
         "期号": st.column_config.NumberColumn("期号", step=1),
         "红1": st.column_config.NumberColumn("红1", min_value=1, max_value=33, step=1),
@@ -771,11 +754,29 @@ def show_admin_page():
         "二等奖注数": st.column_config.NumberColumn("二等奖注数", step=1),
     }
     
-    # ==================== 可编辑表格 ====================
+    # 显示数据量统计
+    st.info(f"📊 当前数据量: {len(current_draws)} 期")
+    
+    # 刷新按钮（从数据库重新加载）
+    col_refresh, _ = st.columns([1, 5])
+    with col_refresh:
+        if st.button("🔄 从数据库重新加载", use_container_width=True):
+            with st.spinner("加载中..."):
+                draws = load_all_from_supabase()
+                if draws:
+                    draws = fill_missing_with_history(draws)
+                    st.session_state['draws_loaded'] = draws
+                    # 清除编辑器缓存
+                    st.session_state.pop('ssq_data_editor', None)
+                    st.success(f"加载 {len(draws)} 期数据")
+                    st.rerun()
+    
     st.markdown("---")
     
-    try:
-        st.data_editor(
+    # 使用 form 包装，确保一次性提交
+    with st.form(key="data_editor_form"):
+        # 显示可编辑表格
+        edited_df = st.data_editor(
             df,
             column_config=column_config,
             use_container_width=True,
@@ -783,329 +784,86 @@ def show_admin_page():
             num_rows="dynamic",
             key="ssq_data_editor"
         )
-    except Exception as e:
-        st.error(f"表格加载失败: {e}")
-        st.info("请尝试刷新页面")
-        return
-    
-    # ==================== 获取最新编辑后的数据 ====================
-    # 重要：从 session_state 获取用户编辑后的数据
-    if 'ssq_data_editor' in st.session_state:
-        edited_data = st.session_state['ssq_data_editor']
-        if edited_data is not None and isinstance(edited_data, pd.DataFrame):
-            current_df = edited_data
-        else:
-            current_df = df
-    else:
-        current_df = df
-    
-    # 确保选择列存在
-    if current_df is not None and '选择' not in current_df.columns:
-        current_df.insert(0, '选择', False)
-    
-    # ==================== 预览差异功能 ====================
-    def preview_changes(table_df, db_draws):
-        """对比当前表格与数据库，返回差异统计"""
-        if table_df is None:
-            return 0, 0, 0, 0
         
-        db_dict = {d['period']: d for d in db_draws}
+        # 保存按钮在 form 内部
+        submitted = st.form_submit_button("💾 保存到数据库", type="primary", use_container_width=True)
         
-        # 安全地移除选择列
-        if '选择' in table_df.columns:
-            table_data = table_df.drop(columns=['选择'])
-        else:
-            table_data = table_df.copy()
-        
-        new_count = 0
-        update_count = 0
-        same_count = 0
-        
-        for idx, row in table_data.iterrows():
-            period = row['期号']
-            if pd.isna(period) or period == 0:
-                continue
-            
-            reds = [row['红1'], row['红2'], row['红3'], row['红4'], row['红5'], row['红6']]
-            current_row = {
-                'period': period,
-                'date': row['开奖日期'],
-                'reds': reds,
-                'blue': row['蓝球'],
-                'pool': row['奖池奖金(元)'],
-                'sales': row['总投注额(元)']
-            }
-            
-            if period not in db_dict:
-                new_count += 1
+        if submitted:
+            if edited_df is None or len(edited_df) == 0:
+                st.error("没有数据可保存")
             else:
-                db_row = db_dict[period]
-                db_reds = db_row.get('reds', [])
-                if (current_row['reds'] == db_reds and 
-                    current_row['blue'] == db_row.get('blue') and
-                    current_row['pool'] == db_row.get('pool') and
-                    current_row['sales'] == db_row.get('sales')):
-                    same_count += 1
-                else:
-                    update_count += 1
-        
-        # 计算删除数量
-        table_periods = set()
-        for period in table_data['期号']:
-            if pd.notna(period) and period != 0:
-                try:
-                    table_periods.add(int(period))
-                except:
-                    pass
-        db_periods = set(db_dict.keys())
-        delete_count = len(db_periods - table_periods)
-        
-        return new_count, update_count, delete_count, same_count
-    
-    # ==================== 预览差异按钮 ====================
-    col_preview, _ = st.columns([2, 4])
-    with col_preview:
-        if st.button("📊 预览差异（对比数据库）", use_container_width=True):
-            db_draws = st.session_state.get('draws_loaded', [])
-            new_c, update_c, delete_c, same_c = preview_changes(current_df, db_draws)
-            
-            st.markdown("### 📋 差异预览")
-            diff_col1, diff_col2, diff_col3, diff_col4 = st.columns(4)
-            with diff_col1:
-                st.metric("新增期号", new_c, delta="将插入数据库")
-            with diff_col2:
-                st.metric("更新期号", update_c, delta="将覆盖现有数据")
-            with diff_col3:
-                st.metric("删除期号", delete_c, delta="将从数据库移除")
-            with diff_col4:
-                st.metric("无变化", same_c, delta="保持不变")
-            
-            if delete_c > 0:
-                st.warning(f"⚠️ 有 {delete_c} 期数据在表格中不存在，保存时将被删除（仅覆盖全部模式）")
-    
-    # ==================== 操作按钮区域 ====================
-    st.markdown("---")
-    st.info("💡 编辑表格后，请先点击【刷新预览】按钮，然后再保存")
-    
-    col1, col2, col3, col4, col5, col6 = st.columns(6)
-    
-    with col1:
-        if st.button("🔄 刷新预览", use_container_width=True, key="refresh_btn"):
-            st.rerun()
-    
-    with col2:
-        if st.button("📊 排序（期号降序）", use_container_width=True, key="sort_btn"):
-            if current_df is not None and len(current_df) > 0:
-                temp_df = current_df.drop(columns=['选择'], errors='ignore')
-                temp_df = temp_df.sort_values(by='期号', ascending=False)
-                temp_df.insert(0, '选择', False)
-                st.session_state['ssq_data_editor'] = temp_df
-                st.success("✅ 排序完成，请再次点击【刷新预览】")
-                st.rerun()
-            else:
-                st.info("暂无数据")
-    
-    with col3:
-        if st.button("➕ 添加空行", use_container_width=True, key="add_row_btn"):
-            if current_df is not None:
-                new_row = pd.DataFrame([{
-                    '选择': False,
-                    '期号': 0,
-                    '开奖日期': '',
-                    '红1': 0, '红2': 0, '红3': 0, '红4': 0, '红5': 0, '红6': 0,
-                    '蓝球': 0,
-                    '奖池奖金(元)': 0,
-                    '一等奖注数': 0,
-                    '一等奖奖金(元)': 0,
-                    '二等奖注数': 0,
-                    '二等奖奖金(元)': 0,
-                    '总投注额(元)': 0
-                }])
-                new_df = pd.concat([current_df, new_row], ignore_index=True)
-                st.session_state['ssq_data_editor'] = new_df
-                st.success("✅ 已添加空行，请点击【刷新预览】")
-                st.rerun()
-    
-    with col4:
-        if st.button("🗑️ 删除选中行", use_container_width=True, key="delete_btn"):
-            if current_df is not None and '选择' in current_df.columns:
-                selected_mask = current_df['选择'] == True
-                selected_count = selected_mask.sum()
-                
-                if selected_count > 0:
-                    confirm = st.checkbox(f"⚠️ 确认删除 {selected_count} 行？")
-                    if confirm:
-                        new_df = current_df[~selected_mask].copy()
-                        new_df['选择'] = False
-                        st.session_state['ssq_data_editor'] = new_df
-                        st.success(f"✅ 已标记删除 {selected_count} 行，请点击【刷新预览】")
-                        st.rerun()
-                    else:
-                        st.info("请勾选确认框后再次点击删除")
-                else:
-                    st.warning("请先勾选要删除的行")
-    
-    with col5:
-        if st.button("💾 覆盖全部", type="primary", use_container_width=True, key="overwrite_btn"):
-            if current_df is None:
-                st.error("请先点击【刷新预览】获取最新数据")
-            else:
-                db_draws = st.session_state.get('draws_loaded', [])
-                new_c, update_c, delete_c, same_c = preview_changes(current_df, db_draws)
-                
-                st.warning(f"⚠️ 覆盖全部模式将删除数据库中的 {delete_c} 期数据，插入 {new_c + update_c} 期数据")
-                st.info(f"其中：新增 {new_c} 期，更新 {update_c} 期，删除 {delete_c} 期")
-                
-                confirm = st.checkbox("确认执行覆盖全部操作？此操作不可撤销！")
-                if confirm:
-                    with st.spinner("正在保存..."):
-                        save_df = current_df.drop(columns=['选择'], errors='ignore')
-                        new_draws = []
-                        errors = 0
-                        
-                        for idx, row in save_df.iterrows():
-                            try:
-                                if pd.isna(row['期号']) or row['期号'] == 0:
-                                    continue
-                                
-                                period = int(row['期号'])
-                                date = str(row['开奖日期']) if pd.notna(row['开奖日期']) and row['开奖日期'] != '' else None
-                                
-                                reds = [
-                                    int(row['红1']) if pd.notna(row['红1']) else 0,
-                                    int(row['红2']) if pd.notna(row['红2']) else 0,
-                                    int(row['红3']) if pd.notna(row['红3']) else 0,
-                                    int(row['红4']) if pd.notna(row['红4']) else 0,
-                                    int(row['红5']) if pd.notna(row['红5']) else 0,
-                                    int(row['红6']) if pd.notna(row['红6']) else 0,
-                                ]
-                                
-                                blue = int(row['蓝球']) if pd.notna(row['蓝球']) else 0
-                                pool = int(row['奖池奖金(元)']) if pd.notna(row['奖池奖金(元)']) else 0
-                                sales = int(row['总投注额(元)']) if pd.notna(row['总投注额(元)']) else 0
-                                prize1_count = int(row['一等奖注数']) if pd.notna(row['一等奖注数']) else 0
-                                prize1_amount = int(row['一等奖奖金(元)']) if pd.notna(row['一等奖奖金(元)']) else 0
-                                prize2_count = int(row['二等奖注数']) if pd.notna(row['二等奖注数']) else 0
-                                prize2_amount = int(row['二等奖奖金(元)']) if pd.notna(row['二等奖奖金(元)']) else 0
-                                
-                                valid_reds = all(1 <= r <= 33 for r in reds if r > 0)
-                                valid_blue = 1 <= blue <= 16 if blue > 0 else True
-                                
-                                if valid_reds and valid_blue:
-                                    new_draws.append({
-                                        'period': period,
-                                        'date': date,
-                                        'reds': sorted(reds),
-                                        'blue': blue,
-                                        'pool': pool,
-                                        'sales': sales,
-                                        'prize1_count': prize1_count,
-                                        'prize1_amount': prize1_amount,
-                                        'prize2_count': prize2_count,
-                                        'prize2_amount': prize2_amount
-                                    })
-                                else:
-                                    errors += 1
-                            except Exception:
+                with st.spinner("正在保存..."):
+                    # 转换 DataFrame 为 draws 列表
+                    new_draws = []
+                    errors = 0
+                    
+                    for idx, row in edited_df.iterrows():
+                        try:
+                            # 检查期号是否有效
+                            if pd.isna(row['期号']) or row['期号'] == 0:
+                                continue
+                            
+                            period = int(row['期号'])
+                            date = str(row['开奖日期']) if pd.notna(row['开奖日期']) and row['开奖日期'] != '' else None
+                            
+                            reds = [
+                                int(row['红1']) if pd.notna(row['红1']) else 0,
+                                int(row['红2']) if pd.notna(row['红2']) else 0,
+                                int(row['红3']) if pd.notna(row['红3']) else 0,
+                                int(row['红4']) if pd.notna(row['红4']) else 0,
+                                int(row['红5']) if pd.notna(row['红5']) else 0,
+                                int(row['红6']) if pd.notna(row['红6']) else 0,
+                            ]
+                            
+                            blue = int(row['蓝球']) if pd.notna(row['蓝球']) else 0
+                            pool = int(row['奖池奖金(元)']) if pd.notna(row['奖池奖金(元)']) else 0
+                            sales = int(row['总投注额(元)']) if pd.notna(row['总投注额(元)']) else 0
+                            prize1_count = int(row['一等奖注数']) if pd.notna(row['一等奖注数']) else 0
+                            prize1_amount = int(row['一等奖奖金(元)']) if pd.notna(row['一等奖奖金(元)']) else 0
+                            prize2_count = int(row['二等奖注数']) if pd.notna(row['二等奖注数']) else 0
+                            prize2_amount = int(row['二等奖奖金(元)']) if pd.notna(row['二等奖奖金(元)']) else 0
+                            
+                            # 验证红球范围
+                            valid_reds = all(1 <= r <= 33 for r in reds if r > 0)
+                            valid_blue = 1 <= blue <= 16 if blue > 0 else True
+                            
+                            if valid_reds and valid_blue:
+                                new_draws.append({
+                                    'period': period,
+                                    'date': date,
+                                    'reds': sorted(reds),
+                                    'blue': blue,
+                                    'pool': pool,
+                                    'sales': sales,
+                                    'prize1_count': prize1_count,
+                                    'prize1_amount': prize1_amount,
+                                    'prize2_count': prize2_count,
+                                    'prize2_amount': prize2_amount
+                                })
+                            else:
                                 errors += 1
-                        
-                        if errors > 0:
-                            st.warning(f"跳过 {errors} 行无效数据")
-                        
-                        if new_draws:
-                            saved = save_draws_to_supabase(new_draws, overwrite=True)
-                            if saved > 0:
-                                st.session_state['draws_loaded'] = new_draws
-                                st.session_state.pop('ssq_data_editor', None)
-                                st.success(f"保存 {saved} 期数据成功！")
-                                st.rerun()
-                else:
-                    st.info("请勾选确认框后再次点击保存")
-    
-    with col6:
-        if st.button("➕ 仅新增更新", type="primary", use_container_width=True, key="upsert_btn"):
-            if current_df is None:
-                st.error("请先点击【刷新预览】获取最新数据")
-            else:
-                db_draws = st.session_state.get('draws_loaded', [])
-                new_c, update_c, delete_c, same_c = preview_changes(current_df, db_draws)
-                
-                st.info(f"📊 仅新增更新模式：新增 {new_c} 期，更新 {update_c} 期（不会删除任何数据）")
-                
-                confirm = st.checkbox("确认执行新增/更新操作？")
-                if confirm:
-                    with st.spinner("正在保存..."):
-                        save_df = current_df.drop(columns=['选择'], errors='ignore')
-                        new_draws = []
-                        errors = 0
-                        
-                        for idx, row in save_df.iterrows():
-                            try:
-                                if pd.isna(row['期号']) or row['期号'] == 0:
-                                    continue
-                                
-                                period = int(row['期号'])
-                                date = str(row['开奖日期']) if pd.notna(row['开奖日期']) and row['开奖日期'] != '' else None
-                                
-                                reds = [
-                                    int(row['红1']) if pd.notna(row['红1']) else 0,
-                                    int(row['红2']) if pd.notna(row['红2']) else 0,
-                                    int(row['红3']) if pd.notna(row['红3']) else 0,
-                                    int(row['红4']) if pd.notna(row['红4']) else 0,
-                                    int(row['红5']) if pd.notna(row['红5']) else 0,
-                                    int(row['红6']) if pd.notna(row['红6']) else 0,
-                                ]
-                                
-                                blue = int(row['蓝球']) if pd.notna(row['蓝球']) else 0
-                                pool = int(row['奖池奖金(元)']) if pd.notna(row['奖池奖金(元)']) else 0
-                                sales = int(row['总投注额(元)']) if pd.notna(row['总投注额(元)']) else 0
-                                prize1_count = int(row['一等奖注数']) if pd.notna(row['一等奖注数']) else 0
-                                prize1_amount = int(row['一等奖奖金(元)']) if pd.notna(row['一等奖奖金(元)']) else 0
-                                prize2_count = int(row['二等奖注数']) if pd.notna(row['二等奖注数']) else 0
-                                prize2_amount = int(row['二等奖奖金(元)']) if pd.notna(row['二等奖奖金(元)']) else 0
-                                
-                                valid_reds = all(1 <= r <= 33 for r in reds if r > 0)
-                                valid_blue = 1 <= blue <= 16 if blue > 0 else True
-                                
-                                if valid_reds and valid_blue:
-                                    new_draws.append({
-                                        'period': period,
-                                        'date': date,
-                                        'reds': sorted(reds),
-                                        'blue': blue,
-                                        'pool': pool,
-                                        'sales': sales,
-                                        'prize1_count': prize1_count,
-                                        'prize1_amount': prize1_amount,
-                                        'prize2_count': prize2_count,
-                                        'prize2_amount': prize2_amount
-                                    })
-                                else:
-                                    errors += 1
-                            except Exception:
-                                errors += 1
-                        
-                        if errors > 0:
-                            st.warning(f"跳过 {errors} 行无效数据")
-                        
-                        if new_draws:
-                            saved = save_draws_to_supabase_upsert(new_draws)
-                            if saved > 0:
-                                all_draws = load_all_from_supabase()
-                                if all_draws:
-                                    all_draws = fill_missing_with_history(all_draws)
-                                    st.session_state['draws_loaded'] = all_draws
-                                    st.session_state.pop('ssq_data_editor', None)
-                                st.success(f"保存 {saved} 期数据成功！")
-                                st.rerun()
+                        except Exception:
+                            errors += 1
+                    
+                    if errors > 0:
+                        st.warning(f"跳过 {errors} 行无效数据（红球1-33，蓝球1-16）")
+                    
+                    if new_draws:
+                        # 先清空再保存
+                        saved = save_draws_to_supabase(new_draws, overwrite=True)
+                        if saved > 0:
+                            st.session_state['draws_loaded'] = new_draws
+                            st.success(f"保存 {saved} 期数据成功！")
+                            st.rerun()
                         else:
-                            st.error("没有有效数据可保存")
-                else:
-                    st.info("请勾选确认框后再次点击保存")
+                            st.error("保存失败")
+                    else:
+                        st.error("没有有效数据可保存")
+    
+    st.markdown("---")
     
     # ==================== Excel上传区域 ====================
-    st.markdown("---")
-    st.subheader("📎 Excel文件上传（完整15列）")
+    st.subheader("📎 Excel文件上传")
     st.caption("格式：期号、开奖日期、红1-6、蓝球、奖池奖金(元)、一等奖注数、一等奖奖金(元)、二等奖注数、二等奖奖金(元)、总投注额(元)")
     
     uploaded_file = st.file_uploader(
@@ -1121,7 +879,7 @@ def show_admin_page():
             if excel_draws and len(excel_draws) > 0:
                 st.success(f"✅ 成功解析 {len(excel_draws)} 期数据")
                 
-                st.markdown("**📊 数据预览（前10行）**")
+                # 预览
                 preview_data = []
                 for d in excel_draws[:10]:
                     reds = d.get('reds', [])
@@ -1130,31 +888,20 @@ def show_admin_page():
                         '期号': d.get('period'),
                         '开奖日期': str(d.get('date', ''))[:10] if d.get('date') else '',
                         '红球': reds_str,
-                        '蓝球': f"{d.get('blue', 0):02d}",
-                        '奖池奖金(元)': d.get('pool', 0),
-                        '一等奖注数': d.get('prize1_count', 0),
-                        '一等奖奖金(元)': d.get('prize1_amount', 0),
-                        '二等奖注数': d.get('prize2_count', 0),
-                        '二等奖奖金(元)': d.get('prize2_amount', 0),
-                        '总投注额(元)': d.get('sales', 0)
+                        '蓝球': f"{d.get('blue', 0):02d}"
                     })
-                
-                preview_df = pd.DataFrame(preview_data)
-                st.dataframe(preview_df, use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(preview_data), use_container_width=True, hide_index=True)
                 
                 col_confirm, col_cancel = st.columns(2)
                 with col_confirm:
-                    if st.button("✅ 确认保存到数据库（将替换现有数据）", type="primary"):
+                    if st.button("✅ 确认保存到数据库", type="primary"):
                         excel_draws = fill_missing_with_history(excel_draws)
                         excel_draws.sort(key=lambda x: x.get('period', 0))
                         saved = save_draws_to_supabase(excel_draws, overwrite=True)
                         if saved > 0:
                             st.session_state['draws_loaded'] = excel_draws
-                            st.session_state.pop('ssq_data_editor', None)
                             st.success(f"保存 {saved} 期数据成功！")
                             st.rerun()
-                        else:
-                            st.error("保存失败")
                 with col_cancel:
                     if st.button("❌ 取消"):
                         st.rerun()
