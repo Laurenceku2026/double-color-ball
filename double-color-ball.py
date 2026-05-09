@@ -929,21 +929,23 @@ def show_admin_page():
             else:
                 st.info("请勾选确认框后再次点击保存")
     
-    with col5:
+        with col5:
         if st.button("➕ 仅新增更新", type="primary", use_container_width=True, key="upsert_btn"):
+            # 使用 current_df 而不是 df
+            save_df = current_df.drop(columns=['选择'], errors='ignore')
+            new_draws = []
+            errors = 0
+            skipped = 0
+            
+            # 先预览差异
             db_draws = st.session_state.get('draws_loaded', [])
-            new_c, update_c, delete_c, same_c = preview_changes(df, db_draws)
+            new_c, update_c, delete_c, same_c = preview_changes(current_df, db_draws)
             
             st.info(f"📊 仅新增更新模式：新增 {new_c} 期，更新 {update_c} 期（不会删除任何数据）")
             
             confirm = st.checkbox("确认执行新增/更新操作？")
             if confirm:
                 with st.spinner("正在保存..."):
-                    save_df = df.drop(columns=['选择'], errors='ignore')
-                    new_draws = []
-                    errors = 0
-                    skipped = 0
-                    
                     for idx, row in save_df.iterrows():
                         try:
                             if pd.isna(row['期号']) or row['期号'] == 0:
@@ -997,12 +999,17 @@ def show_admin_page():
                     if new_draws:
                         saved = save_draws_to_supabase_upsert(new_draws)
                         if saved > 0:
+                            # 重新加载数据
                             all_draws = load_all_from_supabase()
                             if all_draws:
                                 all_draws = fill_missing_with_history(all_draws)
                                 st.session_state['draws_loaded'] = all_draws
+                                # 清除编辑缓存
+                                st.session_state.pop('current_edited_df', None)
                             st.success(f"保存 {saved} 期数据成功！")
                             st.rerun()
+                    else:
+                        st.error("没有有效数据可保存")
             else:
                 st.info("请勾选确认框后再次点击保存")
     
@@ -1013,6 +1020,7 @@ def show_admin_page():
             else:
                 st.warning("数据库暂无数据")
     
+        # ==================== 可编辑表格 ====================
         # ==================== 可编辑表格 ====================
     st.markdown("---")
     
@@ -1042,12 +1050,15 @@ def show_admin_page():
             num_rows="dynamic",
             key="ssq_data_editor"
         )
-        # 关键：保存编辑后的数据
-        df = edited_df
+        # 保存当前编辑后的数据到 session_state
+        st.session_state['current_edited_df'] = edited_df
     except Exception as e:
         st.error(f"表格加载失败: {e}")
         st.info("请尝试刷新页面")
         return
+    
+    # 获取当前有效的数据（优先使用编辑后的）
+    current_df = st.session_state.get('current_edited_df', df)
     
     # ==================== Excel上传区域 ====================
     st.markdown("---")
