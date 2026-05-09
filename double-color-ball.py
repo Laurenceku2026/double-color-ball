@@ -620,7 +620,7 @@ def parse_draws_from_text(text: str) -> List[Dict]:
     return draws
 
 def show_admin_page():
-    """管理员页面 - 可编辑表格 + 复选框删除"""
+    """管理员页面 - 可编辑表格 + 复选框删除 + 按钮在表格上方"""
     
     st.subheader("📋 数据编辑器")
     st.caption("💡 双击单元格可编辑 | 选中行复选框后点击删除 | 点击排序按钮按期号排序")
@@ -666,47 +666,17 @@ def show_admin_page():
         # 空DataFrame
         df = pd.DataFrame(columns=['选择'] + columns[1:])
     
-    # 配置列类型
-    column_config = {
-        "选择": st.column_config.CheckboxColumn("选择", help="勾选要删除的行"),
-        "开奖日期": st.column_config.TextColumn("开奖日期"),
-        "期号": st.column_config.NumberColumn("期号", step=1),
-        "红1": st.column_config.NumberColumn("红1", min_value=1, max_value=33, step=1),
-        "红2": st.column_config.NumberColumn("红2", min_value=1, max_value=33, step=1),
-        "红3": st.column_config.NumberColumn("红3", min_value=1, max_value=33, step=1),
-        "红4": st.column_config.NumberColumn("红4", min_value=1, max_value=33, step=1),
-        "红5": st.column_config.NumberColumn("红5", min_value=1, max_value=33, step=1),
-        "红6": st.column_config.NumberColumn("红6", min_value=1, max_value=33, step=1),
-        "蓝球": st.column_config.NumberColumn("蓝球", min_value=1, max_value=16, step=1),
-        "一等奖注数": st.column_config.NumberColumn("一等奖注数", step=1),
-        "二等奖注数": st.column_config.NumberColumn("二等奖注数", step=1),
-    }
-    
-    # 显示可编辑表格
-    try:
-        edited_df = st.data_editor(
-            df,
-            column_config=column_config,
-            use_container_width=True,
-            height=500,
-            key="ssq_data_editor"
-        )
-    except Exception as e:
-        st.error(f"表格加载失败: {e}")
-        st.info("请尝试刷新页面")
-        return
-    
-    # 操作按钮
+    # ==================== 按钮区域（放在表格上方） ====================
     st.markdown("---")
     col1, col2, col3, col4, col5, col6 = st.columns(6)
     
     with col1:
-        if st.button("🔄 排序（按期号降序）", use_container_width=True):
+        if st.button("🔄 排序（按期号降序）", use_container_width=True, key="sort_btn"):
             with st.spinner("排序中..."):
                 # 从当前编辑的数据中提取，按期号排序
-                if len(edited_df) > 0:
+                if len(df) > 0:
                     # 移除选择列进行排序
-                    temp_df = edited_df.drop(columns=['选择'], errors='ignore')
+                    temp_df = df.drop(columns=['选择'], errors='ignore')
                     temp_df = temp_df.sort_values(by='期号', ascending=False)
                     temp_df.insert(0, '选择', False)
                     st.session_state['ssq_data_editor'] = temp_df
@@ -715,7 +685,7 @@ def show_admin_page():
                     st.info("暂无数据")
     
     with col2:
-        if st.button("➕ 添加空行", use_container_width=True):
+        if st.button("➕ 添加空行", use_container_width=True, key="add_row_btn"):
             # 添加一行空数据
             new_row = pd.DataFrame([{
                 '选择': False,
@@ -730,33 +700,33 @@ def show_admin_page():
                 '二等奖奖金(元)': 0,
                 '总投注额(元)': 0
             }])
-            new_df = pd.concat([edited_df, new_row], ignore_index=True)
+            new_df = pd.concat([df, new_row], ignore_index=True)
             st.session_state['ssq_data_editor'] = new_df
             st.rerun()
     
     with col3:
-        if st.button("🗑️ 删除选中行", use_container_width=True):
+        if st.button("🗑️ 删除选中行", use_container_width=True, key="delete_btn"):
             # 删除勾选的行
-            selected_mask = edited_df['选择'] == True
-            selected_count = selected_mask.sum()
-            
-            if selected_count > 0:
-                # 确认对话框
-                confirm = st.checkbox(f"确认删除 {selected_count} 行？")
-                if confirm:
-                    new_df = edited_df[~selected_mask].copy()
-                    # 重置选择列
-                    new_df['选择'] = False
-                    st.session_state['ssq_data_editor'] = new_df
-                    st.success(f"已删除 {selected_count} 行")
-                    st.rerun()
+            if '选择' in df.columns:
+                selected_mask = df['选择'] == True
+                selected_count = selected_mask.sum()
+                
+                if selected_count > 0:
+                    # 确认对话框
+                    confirm = st.checkbox(f"⚠️ 确认删除 {selected_count} 行？")
+                    if confirm:
+                        new_df = df[~selected_mask].copy()
+                        new_df['选择'] = False
+                        st.session_state['ssq_data_editor'] = new_df
+                        st.success(f"已删除 {selected_count} 行")
+                        st.rerun()
+                    else:
+                        st.info("请勾选确认框后再次点击删除")
                 else:
-                    st.info("请勾选确认框后再次点击删除")
-            else:
-                st.warning("请先勾选要删除的行")
+                    st.warning("请先勾选要删除的行")
     
     with col4:
-        if st.button("📥 从数据库加载", type="primary", use_container_width=True):
+        if st.button("📥 从数据库加载", type="primary", use_container_width=True, key="load_btn"):
             with st.spinner("加载中..."):
                 draws = load_all_from_supabase()
                 if draws:
@@ -768,10 +738,10 @@ def show_admin_page():
                     st.error("无数据")
     
     with col5:
-        if st.button("💾 保存到数据库", type="primary", use_container_width=True):
+        if st.button("💾 保存到数据库", type="primary", use_container_width=True, key="save_btn"):
             with st.spinner("保存中..."):
                 # 移除选择列
-                save_df = edited_df.drop(columns=['选择'], errors='ignore')
+                save_df = df.drop(columns=['选择'], errors='ignore')
                 new_draws = []
                 errors = 0
                 skipped = 0
@@ -829,7 +799,7 @@ def show_admin_page():
                 if skipped > 0:
                     st.warning(f"跳过 {skipped} 行空数据")
                 if errors > 0:
-                    st.warning(f"跳过 {errors} 行无效数据")
+                    st.warning(f"跳过 {errors} 行无效数据（红球1-33，蓝球1-16）")
                 
                 if new_draws:
                     new_draws = fill_missing_with_history(new_draws)
@@ -843,16 +813,52 @@ def show_admin_page():
                     st.error("没有有效数据可保存")
     
     with col6:
-        if st.button("📊 查看统计", use_container_width=True):
+        if st.button("📊 查看统计", use_container_width=True, key="stats_btn"):
             if current_draws:
                 st.info(f"当前数据库：{len(current_draws)} 期数据，范围：{current_draws[0].get('period')} - {current_draws[-1].get('period')}")
             else:
                 st.warning("数据库暂无数据")
     
-    # Excel上传区域
+    # ==================== 可编辑表格 ====================
+    st.markdown("---")
+    
+    # 配置列类型
+    column_config = {
+        "选择": st.column_config.CheckboxColumn("选择", help="勾选要删除的行"),
+        "开奖日期": st.column_config.TextColumn("开奖日期"),
+        "期号": st.column_config.NumberColumn("期号", step=1),
+        "红1": st.column_config.NumberColumn("红1", min_value=1, max_value=33, step=1),
+        "红2": st.column_config.NumberColumn("红2", min_value=1, max_value=33, step=1),
+        "红3": st.column_config.NumberColumn("红3", min_value=1, max_value=33, step=1),
+        "红4": st.column_config.NumberColumn("红4", min_value=1, max_value=33, step=1),
+        "红5": st.column_config.NumberColumn("红5", min_value=1, max_value=33, step=1),
+        "红6": st.column_config.NumberColumn("红6", min_value=1, max_value=33, step=1),
+        "蓝球": st.column_config.NumberColumn("蓝球", min_value=1, max_value=16, step=1),
+        "一等奖注数": st.column_config.NumberColumn("一等奖注数", step=1),
+        "二等奖注数": st.column_config.NumberColumn("二等奖注数", step=1),
+    }
+    
+    # 显示可编辑表格
+    try:
+        edited_df = st.data_editor(
+            df,
+            column_config=column_config,
+            use_container_width=True,
+            height=500,
+            key="ssq_data_editor"
+        )
+        # 保存编辑后的数据回df
+        df = edited_df
+    except Exception as e:
+        st.error(f"表格加载失败: {e}")
+        st.info("请尝试刷新页面")
+        return
+    
+    # ==================== Excel上传区域（放在表格下方） ====================
     st.markdown("---")
     st.subheader("📎 Excel文件上传（完整15列）")
     st.caption("格式：期号、开奖日期、红1-6、蓝球、奖池奖金(元)、一等奖注数、一等奖奖金(元)、二等奖注数、二等奖奖金(元)、总投注额(元)")
+    st.caption("💡 预览表格支持横向滚动，确认数据正确后再保存")
     
     uploaded_file = st.file_uploader(
         "选择Excel文件",
@@ -867,19 +873,35 @@ def show_admin_page():
             if excel_draws and len(excel_draws) > 0:
                 st.success(f"✅ 成功解析 {len(excel_draws)} 期数据")
                 
-                preview_df = pd.DataFrame([{
-                    '期号': d['period'],
-                    '日期': str(d.get('date', ''))[:10],
-                    '红球': ','.join(f"{r:02d}" for r in d['reds']),
-                    '蓝球': f"{d['blue']:02d}",
-                    '奖池(亿)': f"{d.get('pool', 0)/1e8:.1f}",
-                    '销量(亿)': f"{d.get('sales', 0)/1e8:.1f}"
-                } for d in excel_draws[:10]])
+                # 预览表格 - 完整15列，横向滚动
+                st.markdown("**📊 数据预览（前10行，横向滚动查看全部列）**")
+                
+                preview_data = []
+                for d in excel_draws[:10]:
+                    reds = d.get('reds', [])
+                    reds_str = ','.join(f"{r:02d}" for r in reds)
+                    
+                    preview_data.append({
+                        '期号': d.get('period'),
+                        '开奖日期': str(d.get('date', ''))[:10] if d.get('date') else '',
+                        '红球': reds_str,
+                        '蓝球': f"{d.get('blue', 0):02d}",
+                        '奖池奖金(元)': d.get('pool', 0),
+                        '一等奖注数': d.get('prize1_count', 0),
+                        '一等奖奖金(元)': d.get('prize1_amount', 0),
+                        '二等奖注数': d.get('prize2_count', 0),
+                        '二等奖奖金(元)': d.get('prize2_amount', 0),
+                        '总投注额(元)': d.get('sales', 0)
+                    })
+                
+                preview_df = pd.DataFrame(preview_data)
                 st.dataframe(preview_df, use_container_width=True, hide_index=True)
+                
+                st.caption(f"📋 共 {len(preview_df.columns)} 列 | 期号范围: {excel_draws[0].get('period')} - {excel_draws[-1].get('period')}")
                 
                 col_confirm, col_cancel = st.columns(2)
                 with col_confirm:
-                    if st.button("✅ 确认保存到数据库", type="primary"):
+                    if st.button("✅ 确认保存到数据库（将替换现有数据）", type="primary"):
                         excel_draws = fill_missing_with_history(excel_draws)
                         excel_draws.sort(key=lambda x: x.get('period', 0))
                         saved = save_draws_to_supabase(excel_draws)
@@ -887,11 +909,14 @@ def show_admin_page():
                             st.session_state['draws_loaded'] = excel_draws
                             st.success(f"保存 {saved} 期数据成功！")
                             st.rerun()
+                        else:
+                            st.error("保存失败")
                 with col_cancel:
-                    if st.button("❌ 取消"):
+                    if st.button("❌ 取消", use_container_width=True):
                         st.rerun()
             else:
                 st.error("解析失败，请检查文件格式")
+                st.info("请确保Excel第一行为列标题，格式与上方说明一致")
 
 
 # ==================== 初始化Session State ====================
