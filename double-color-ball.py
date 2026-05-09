@@ -1225,67 +1225,69 @@ with st.sidebar:
     
     # 四种算法对比
     # 四种算法对比
-with st.expander("📖 五种AI算法对比（动态回测）"):
-    # 回滚期数滑块和刷新按钮放在同一行（这里需要4个空格缩进）
-    col1, col2 = st.columns([3, 1])
-    
-    with col1:
-        backtest_periods = st.slider(
-            "回测期数",
-            min_value=10,
-            max_value=min(200, len(draws) - 10),
-            value=30,
-            step=5,
-            key="sidebar_backtest_periods"
-        )
-    
-    with col2:
-        if st.button("🔄 刷新ROI", use_container_width=True, key="refresh_roi_btn"):
-            # 清除缓存，强制重新计算
-            st.cache_data.clear()
-            st.rerun()
-    
-    # 动态计算ROI（这里也需要4个空格缩进）
-    if len(draws) >= backtest_periods:
-        roi_results = {}
-        for method in ["方法1", "方法2", "方法3", "方法4"]:
-            result = backtest_roi(draws, method, num_bets=4, lookback=backtest_periods)
-            roi_results[method] = result['roi']
+    # 五种AI算法对比（动态回测）
+    with st.expander("📖 五种AI算法对比（动态回测）"):
+        # 回测期数滑块和刷新按钮放在同一行
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            backtest_periods = st.slider(
+                "回测期数",
+                min_value=10,
+                max_value=min(200, len(draws) - 10) if len(draws) > 10 else 30,
+                value=30,
+                step=5,
+                key="sidebar_backtest_periods"
+            )
+        with col2:
+            if st.button("🔄 刷新ROI", use_container_width=True, key="refresh_roi_btn"):
+                st.cache_data.clear()
+                st.rerun()
         
-        # 计算综合模式ROI（取方法2-4的平均）
-        ensemble_roi = (roi_results.get("方法2", 0) + roi_results.get("方法3", 0) + roi_results.get("方法4", 0)) / 3
-        
-        st.markdown(f"""
-        | 算法 | 特点 | {backtest_periods}期ROI |
-        |------|------|---------|
-        | 🟢 方法1 | 冷热码+和值预测 | {roi_results.get("方法1", 0):.1f}% |
-        | 🟡 方法2 | 胆拖混合 | {roi_results.get("方法2", 0):.1f}% |
-        | 🔵 方法3 | LightGBM | {roi_results.get("方法3", 0):.1f}% |
-        | 🟣 方法4 | XGBoost+NN | {roi_results.get("方法4", 0):.1f}% |
-        | 🌟 方法5 | 综合模式（投票） | {ensemble_roi:.1f}% |
-        """)
-        
-        # 显示最佳方法
-        best_method = max(roi_results, key=roi_results.get)
-        best_roi = roi_results[best_method]
-        if ensemble_roi > best_roi:
-            st.success(f"🏆 当前最佳：方法5 综合模式 (ROI: {ensemble_roi:.1f}%)")
+        # 动态计算ROI
+        if len(draws) >= backtest_periods:
+            try:
+                roi_results = {}
+                for method in ["方法1", "方法2", "方法3", "方法4"]:
+                    result = backtest_roi(draws, method, num_bets=4, lookback=backtest_periods)
+                    roi_results[method] = result['roi']
+                
+                # 计算综合模式ROI（取方法2-4的平均）
+                ensemble_roi = (roi_results.get("方法2", 0) + roi_results.get("方法3", 0) + roi_results.get("方法4", 0)) / 3
+                
+                st.markdown(f"""
+                | 算法 | 特点 | {backtest_periods}期ROI |
+                |------|------|---------|
+                | 🟢 方法1 | 冷热码+和值预测 | {roi_results.get("方法1", 0):.1f}% |
+                | 🟡 方法2 | 胆拖混合 | {roi_results.get("方法2", 0):.1f}% |
+                | 🔵 方法3 | LightGBM | {roi_results.get("方法3", 0):.1f}% |
+                | 🟣 方法4 | XGBoost+NN | {roi_results.get("方法4", 0):.1f}% |
+                | 🌟 方法5 | 综合模式（投票） | {ensemble_roi:.1f}% |
+                """)
+                
+                # 显示最佳方法
+                best_method = max(roi_results, key=roi_results.get)
+                best_roi = roi_results[best_method]
+                if ensemble_roi > best_roi:
+                    st.success(f"🏆 当前最佳：方法5 综合模式 (ROI: {ensemble_roi:.1f}%)")
+                else:
+                    st.success(f"🏆 当前最佳：{best_method} (ROI: {best_roi:.1f}%)")
+                
+                from datetime import datetime
+                st.caption(f"📅 基于最近{backtest_periods}期回测")
+            except Exception as e:
+                st.error(f"回测计算失败: {e}")
+                st.info("请确保数据量足够（至少30期）")
         else:
-            st.success(f"🏆 当前最佳：{best_method} (ROI: {best_roi:.1f}%)")
-        
-        # 显示更新时间
-        st.caption(f"📅 更新时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    else:
-        st.markdown(f"""
-        | 算法 | 特点 | 说明 |
-        |------|------|------|
-        | 🟢 方法1 | 冷热码+和值 | 数据不足，需≥{backtest_periods}期 |
-        | 🟡 方法2 | 胆拖混合 | 数据不足，需≥{backtest_periods}期 |
-        | 🔵 方法3 | LightGBM | 数据不足，需≥{backtest_periods}期 |
-        | 🟣 方法4 | XGBoost+NN | 数据不足，需≥{backtest_periods}期 |
-        | 🌟 方法5 | 综合模式 | 数据不足，需≥{backtest_periods}期 |
-        """)
-        st.warning(f"当前只有 {len(draws)} 期数据，需要至少 {backtest_periods} 期才能回测")
+            st.warning(f"当前只有 {len(draws)} 期数据，需要至少 {backtest_periods} 期才能回测")
+            st.markdown("""
+            | 算法 | 特点 | 说明 |
+            |------|------|------|
+            | 🟢 方法1 | 冷热码+和值 | 数据不足 |
+            | 🟡 方法2 | 胆拖混合 | 数据不足 |
+            | 🔵 方法3 | LightGBM | 数据不足 |
+            | 🟣 方法4 | XGBoost+NN | 数据不足 |
+            | 🌟 方法5 | 综合模式 | 数据不足 |
+            """)
     
     # 奖金结构
     with st.expander("💰 奖金结构（7+1复式）"):
@@ -2485,7 +2487,7 @@ def backtest_roi(draws: List[Dict], method: str, num_bets: int = 4, lookback: in
     prize_breakdown = {"first": 0, "second": 0, "third": 0, "fourth": 0, "fifth": 0, "sixth": 0, "fuyun": 0}
     
     for i in range(lookback, len(draws)):
-        historical = draws[:i]
+        historical = draws[:i]   # 👈 修复：使用所有历史数据
         actual = draws[i]
         
         bets = BetGenerator.generate(method, historical, num_bets)
