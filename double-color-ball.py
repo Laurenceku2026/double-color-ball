@@ -700,7 +700,7 @@ def show_admin_page():
     """管理员页面 - 可编辑表格 + 两个保存按钮 + 预览差异"""
     
     st.subheader("📋 数据编辑器")
-    st.caption("💡 双击单元格可编辑 | 选中行复选框后点击删除 | 点击排序按钮按期号排序")
+    st.caption("💡 双击单元格可编辑 | 选中行复选框后点击删除 | 表格底部有 '+' 按钮添加新行")
     
     # 定义固定列名（15列，与Supabase表结构对齐）
     columns = [
@@ -717,19 +717,18 @@ def show_admin_page():
                 if draws:
                     draws = fill_missing_with_history(draws)
                     st.session_state['draws_loaded'] = draws
+                    # 清除编辑缓存
+                    st.session_state.pop('ssq_data_editor', None)
                     st.success(f"加载 {len(draws)} 期数据")
                     st.rerun()
     
     # 加载现有数据
     current_draws = st.session_state.get('draws_loaded', [])
-    
-    # 显示数据量统计
     st.info(f"📊 当前数据量: {len(current_draws)} 期")
     
     # 转换为DataFrame（不带选择列）
     if current_draws:
         display_draws = sorted(current_draws, key=lambda x: x.get('period', 0), reverse=True)
-        
         data_rows = []
         for d in display_draws:
             reds = d.get('reds', [])
@@ -756,9 +755,49 @@ def show_admin_page():
     else:
         df = pd.DataFrame(columns=['选择'] + columns[1:])
     
+    # 配置列类型
+    column_config = {
+        "选择": st.column_config.CheckboxColumn("选择", help="勾选要删除的行"),
+        "开奖日期": st.column_config.TextColumn("开奖日期"),
+        "期号": st.column_config.NumberColumn("期号", step=1),
+        "红1": st.column_config.NumberColumn("红1", min_value=1, max_value=33, step=1),
+        "红2": st.column_config.NumberColumn("红2", min_value=1, max_value=33, step=1),
+        "红3": st.column_config.NumberColumn("红3", min_value=1, max_value=33, step=1),
+        "红4": st.column_config.NumberColumn("红4", min_value=1, max_value=33, step=1),
+        "红5": st.column_config.NumberColumn("红5", min_value=1, max_value=33, step=1),
+        "红6": st.column_config.NumberColumn("红6", min_value=1, max_value=33, step=1),
+        "蓝球": st.column_config.NumberColumn("蓝球", min_value=1, max_value=16, step=1),
+        "一等奖注数": st.column_config.NumberColumn("一等奖注数", step=1),
+        "二等奖注数": st.column_config.NumberColumn("二等奖注数", step=1),
+    }
+    
+    # ==================== 可编辑表格 ====================
+    st.markdown("---")
+    
+    # 显示可编辑表格 - 使用 session_state 中的值或默认 df
+    try:
+        st.data_editor(
+            df,
+            column_config=column_config,
+            use_container_width=True,
+            height=500,
+            num_rows="dynamic",
+            key="ssq_data_editor"
+        )
+    except Exception as e:
+        st.error(f"表格加载失败: {e}")
+        st.info("请尝试刷新页面")
+        return
+    
+    # ==================== 获取编辑后的数据 ====================
+    # 关键：从 session_state 获取编辑后的数据
+    if 'ssq_data_editor' in st.session_state and st.session_state['ssq_data_editor'] is not None:
+        current_df = st.session_state['ssq_data_editor']
+    else:
+        current_df = df
+    
     # ==================== 预览差异功能 ====================
     def preview_changes(table_df, db_draws):
-        """对比当前表格与数据库，返回差异统计"""
         db_dict = {d['period']: d for d in db_draws}
         table_data = table_df.drop(columns=['选择'], errors='ignore')
         
@@ -804,12 +843,11 @@ def show_admin_page():
         return new_count, update_count, delete_count, same_count
     
     # ==================== 预览差异按钮 ====================
-    st.markdown("---")
     col_preview, _ = st.columns([2, 4])
     with col_preview:
         if st.button("📊 预览差异（对比数据库）", use_container_width=True):
             db_draws = st.session_state.get('draws_loaded', [])
-            new_c, update_c, delete_c, same_c = preview_changes(df, db_draws)
+            new_c, update_c, delete_c, same_c = preview_changes(current_df, db_draws)
             
             st.markdown("### 📋 差异预览")
             diff_col1, diff_col2, diff_col3, diff_col4 = st.columns(4)
@@ -825,58 +863,65 @@ def show_admin_page():
             if delete_c > 0:
                 st.warning(f"⚠️ 有 {delete_c} 期数据在表格中不存在，保存时将被删除（仅覆盖全部模式）")
     
-    # 显示可编辑表格
-    try:
-        edited_df = st.data_editor(
-            df,
-            column_config=column_config,
-            use_container_width=True,
-            height=500,
-            num_rows="dynamic",
-            key="ssq_data_editor"
-        )
-        # 保存当前编辑后的数据到 session_state
-        st.session_state['current_edited_df'] = edited_df
-    except Exception as e:
-        st.error(f"表格加载失败: {e}")
-        st.info("请尝试刷新页面")
-        return
-    
-    # 获取当前有效的数据（优先使用编辑后的）
-    current_df = st.session_state.get('current_edited_df', df)
-    # ==================== 按钮区域 ====================
+    # ==================== 操作按钮区域 ====================
     st.markdown("---")
     col1, col2, col3, col4, col5, col6 = st.columns(6)
     
     with col1:
         if st.button("🔄 排序（按期号降序）", use_container_width=True, key="sort_btn"):
-            if len(df) > 0:
-                temp_df = df.drop(columns=['选择'], errors='ignore')
+            if len(current_df) > 0:
+                temp_df = current_df.drop(columns=['选择'], errors='ignore')
                 temp_df = temp_df.sort_values(by='期号', ascending=False)
                 temp_df.insert(0, '选择', False)
-                st.success("✅ 排序完成，请点击【从数据库加载】刷新表格查看效果")
+                st.session_state['ssq_data_editor'] = temp_df
+                st.success("✅ 排序完成")
+                st.rerun()
             else:
                 st.info("暂无数据")
     
     with col2:
         if st.button("➕ 添加空行", use_container_width=True, key="add_row_btn"):
-            st.info("💡 请在表格底部点击 '+' 按钮添加新行")
+            new_row = pd.DataFrame([{
+                '选择': False,
+                '期号': 0,
+                '开奖日期': '',
+                '红1': 0, '红2': 0, '红3': 0, '红4': 0, '红5': 0, '红6': 0,
+                '蓝球': 0,
+                '奖池奖金(元)': 0,
+                '一等奖注数': 0,
+                '一等奖奖金(元)': 0,
+                '二等奖注数': 0,
+                '二等奖奖金(元)': 0,
+                '总投注额(元)': 0
+            }])
+            new_df = pd.concat([current_df, new_row], ignore_index=True)
+            st.session_state['ssq_data_editor'] = new_df
+            st.success("✅ 已添加空行")
+            st.rerun()
     
     with col3:
         if st.button("🗑️ 删除选中行", use_container_width=True, key="delete_btn"):
-            if '选择' in df.columns:
-                selected_mask = df['选择'] == True
+            if '选择' in current_df.columns:
+                selected_mask = current_df['选择'] == True
                 selected_count = selected_mask.sum()
                 
                 if selected_count > 0:
-                    st.info(f"✅ 已标记删除 {selected_count} 行，请点击【从数据库加载】刷新表格")
+                    confirm = st.checkbox(f"⚠️ 确认删除 {selected_count} 行？")
+                    if confirm:
+                        new_df = current_df[~selected_mask].copy()
+                        new_df['选择'] = False
+                        st.session_state['ssq_data_editor'] = new_df
+                        st.success(f"✅ 已删除 {selected_count} 行")
+                        st.rerun()
+                    else:
+                        st.info("请勾选确认框后再次点击删除")
                 else:
                     st.warning("请先勾选要删除的行")
     
     with col4:
         if st.button("💾 覆盖全部", type="primary", use_container_width=True, key="overwrite_btn"):
             db_draws = st.session_state.get('draws_loaded', [])
-            new_c, update_c, delete_c, same_c = preview_changes(df, db_draws)
+            new_c, update_c, delete_c, same_c = preview_changes(current_df, db_draws)
             
             st.warning(f"⚠️ 覆盖全部模式将删除数据库中的 {delete_c} 期数据，插入 {new_c + update_c} 期数据")
             st.info(f"其中：新增 {new_c} 期，更新 {update_c} 期，删除 {delete_c} 期")
@@ -884,15 +929,13 @@ def show_admin_page():
             confirm = st.checkbox("确认执行覆盖全部操作？此操作不可撤销！")
             if confirm:
                 with st.spinner("正在保存..."):
-                    save_df = df.drop(columns=['选择'], errors='ignore')
+                    save_df = current_df.drop(columns=['选择'], errors='ignore')
                     new_draws = []
                     errors = 0
-                    skipped = 0
                     
                     for idx, row in save_df.iterrows():
                         try:
                             if pd.isna(row['期号']) or row['期号'] == 0:
-                                skipped += 1
                                 continue
                             
                             period = int(row['期号'])
@@ -943,6 +986,7 @@ def show_admin_page():
                         saved = save_draws_to_supabase(new_draws, overwrite=True)
                         if saved > 0:
                             st.session_state['draws_loaded'] = new_draws
+                            st.session_state.pop('ssq_data_editor', None)
                             st.success(f"保存 {saved} 期数据成功！")
                             st.rerun()
             else:
@@ -950,13 +994,6 @@ def show_admin_page():
     
     with col5:
         if st.button("➕ 仅新增更新", type="primary", use_container_width=True, key="upsert_btn"):
-            # 使用 current_df 而不是 df
-            save_df = current_df.drop(columns=['选择'], errors='ignore')
-            new_draws = []
-            errors = 0
-            skipped = 0
-            
-            # 先预览差异
             db_draws = st.session_state.get('draws_loaded', [])
             new_c, update_c, delete_c, same_c = preview_changes(current_df, db_draws)
             
@@ -965,10 +1002,13 @@ def show_admin_page():
             confirm = st.checkbox("确认执行新增/更新操作？")
             if confirm:
                 with st.spinner("正在保存..."):
+                    save_df = current_df.drop(columns=['选择'], errors='ignore')
+                    new_draws = []
+                    errors = 0
+                    
                     for idx, row in save_df.iterrows():
                         try:
                             if pd.isna(row['期号']) or row['期号'] == 0:
-                                skipped += 1
                                 continue
                             
                             period = int(row['期号'])
@@ -1018,13 +1058,11 @@ def show_admin_page():
                     if new_draws:
                         saved = save_draws_to_supabase_upsert(new_draws)
                         if saved > 0:
-                            # 重新加载数据
                             all_draws = load_all_from_supabase()
                             if all_draws:
                                 all_draws = fill_missing_with_history(all_draws)
                                 st.session_state['draws_loaded'] = all_draws
-                                # 清除编辑缓存
-                                st.session_state.pop('current_edited_df', None)
+                                st.session_state.pop('ssq_data_editor', None)
                             st.success(f"保存 {saved} 期数据成功！")
                             st.rerun()
                     else:
@@ -1034,32 +1072,12 @@ def show_admin_page():
     
     with col6:
         if st.button("📊 查看统计", use_container_width=True, key="stats_btn"):
+            current_draws = st.session_state.get('draws_loaded', [])
             if current_draws:
                 st.info(f"当前数据库：{len(current_draws)} 期数据，范围：{current_draws[0].get('period')} - {current_draws[-1].get('period')}")
             else:
                 st.warning("数据库暂无数据")
     
-        # ==================== 可编辑表格 ====================
-        # ==================== 可编辑表格 ====================
-    st.markdown("---")
-    
-    # 配置列类型
-    column_config = {
-        "选择": st.column_config.CheckboxColumn("选择", help="勾选要删除的行"),
-        "开奖日期": st.column_config.TextColumn("开奖日期"),
-        "期号": st.column_config.NumberColumn("期号", step=1),
-        "红1": st.column_config.NumberColumn("红1", min_value=1, max_value=33, step=1),
-        "红2": st.column_config.NumberColumn("红2", min_value=1, max_value=33, step=1),
-        "红3": st.column_config.NumberColumn("红3", min_value=1, max_value=33, step=1),
-        "红4": st.column_config.NumberColumn("红4", min_value=1, max_value=33, step=1),
-        "红5": st.column_config.NumberColumn("红5", min_value=1, max_value=33, step=1),
-        "红6": st.column_config.NumberColumn("红6", min_value=1, max_value=33, step=1),
-        "蓝球": st.column_config.NumberColumn("蓝球", min_value=1, max_value=16, step=1),
-        "一等奖注数": st.column_config.NumberColumn("一等奖注数", step=1),
-        "二等奖注数": st.column_config.NumberColumn("二等奖注数", step=1),
-    }
-    
-       
     # ==================== Excel上传区域 ====================
     st.markdown("---")
     st.subheader("📎 Excel文件上传（完整15列）")
@@ -1078,7 +1096,6 @@ def show_admin_page():
             if excel_draws and len(excel_draws) > 0:
                 st.success(f"✅ 成功解析 {len(excel_draws)} 期数据")
                 
-                # 预览表格
                 st.markdown("**📊 数据预览（前10行）**")
                 preview_data = []
                 for d in excel_draws[:10]:
@@ -1108,6 +1125,7 @@ def show_admin_page():
                         saved = save_draws_to_supabase(excel_draws, overwrite=True)
                         if saved > 0:
                             st.session_state['draws_loaded'] = excel_draws
+                            st.session_state.pop('ssq_data_editor', None)
                             st.success(f"保存 {saved} 期数据成功！")
                             st.rerun()
                         else:
