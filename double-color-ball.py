@@ -1224,25 +1224,28 @@ with st.sidebar:
         st.caption(f"MCP服务: {'✅ 可用' if MCP_AVAILABLE else '❌ 不可用'}")
     
     # 四种算法对比
-    with st.expander("📖 五种AI算法对比（动态回测）"):
-    # 回测期数滑块和刷新按钮放在同一行
+    # 四种算法对比
+with st.expander("📖 五种AI算法对比（动态回测）"):
+    # 回滚期数滑块和刷新按钮放在同一行（这里需要4个空格缩进）
     col1, col2 = st.columns([3, 1])
+    
     with col1:
         backtest_periods = st.slider(
-            "回测期数", 
-            min_value=10, 
-            max_value=min(200, len(draws)-10), 
-            value=30, 
-            step=5, 
+            "回测期数",
+            min_value=10,
+            max_value=min(200, len(draws) - 10),
+            value=30,
+            step=5,
             key="sidebar_backtest_periods"
         )
+    
     with col2:
         if st.button("🔄 刷新ROI", use_container_width=True, key="refresh_roi_btn"):
             # 清除缓存，强制重新计算
             st.cache_data.clear()
             st.rerun()
     
-    # 动态计算ROI
+    # 动态计算ROI（这里也需要4个空格缩进）
     if len(draws) >= backtest_periods:
         roi_results = {}
         for method in ["方法1", "方法2", "方法3", "方法4"]:
