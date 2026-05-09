@@ -1013,7 +1013,7 @@ def show_admin_page():
             else:
                 st.warning("数据库暂无数据")
     
-    # ==================== 可编辑表格 ====================
+        # ==================== 可编辑表格 ====================
     st.markdown("---")
     
     # 配置列类型
@@ -1033,16 +1033,17 @@ def show_admin_page():
     }
     
     # 显示可编辑表格
-    
     try:
-        st.data_editor(
+        edited_df = st.data_editor(
             df,
             column_config=column_config,
             use_container_width=True,
             height=500,
-            num_rows="dynamic",  # 👈 添加这一行，启用动态行（显示 '+' 按钮）
+            num_rows="dynamic",
             key="ssq_data_editor"
         )
+        # 关键：保存编辑后的数据
+        df = edited_df
     except Exception as e:
         st.error(f"表格加载失败: {e}")
         st.info("请尝试刷新页面")
