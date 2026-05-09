@@ -1224,15 +1224,65 @@ with st.sidebar:
         st.caption(f"MCP服务: {'✅ 可用' if MCP_AVAILABLE else '❌ 不可用'}")
     
     # 四种算法对比
-    with st.expander("📖 四种AI算法对比"):
-        st.markdown("""
-        | 算法 | 特点 | 预期ROI |
+    with st.expander("📖 五种AI算法对比（动态回测）"):
+    # 回测期数滑块和刷新按钮放在同一行
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        backtest_periods = st.slider(
+            "回测期数", 
+            min_value=10, 
+            max_value=min(200, len(draws)-10), 
+            value=30, 
+            step=5, 
+            key="sidebar_backtest_periods"
+        )
+    with col2:
+        if st.button("🔄 刷新ROI", use_container_width=True, key="refresh_roi_btn"):
+            # 清除缓存，强制重新计算
+            st.cache_data.clear()
+            st.rerun()
+    
+    # 动态计算ROI
+    if len(draws) >= backtest_periods:
+        roi_results = {}
+        for method in ["方法1", "方法2", "方法3", "方法4"]:
+            result = backtest_roi(draws, method, num_bets=4, lookback=backtest_periods)
+            roi_results[method] = result['roi']
+        
+        # 计算综合模式ROI（取方法2-4的平均）
+        ensemble_roi = (roi_results.get("方法2", 0) + roi_results.get("方法3", 0) + roi_results.get("方法4", 0)) / 3
+        
+        st.markdown(f"""
+        | 算法 | 特点 | {backtest_periods}期ROI |
         |------|------|---------|
-        | 🟢 方法1:当前方法 | 冷热码+和值预测 | +33% |
-        | 🟡 方法2:胆拖混合 | 当前方法+胆码 | +92% |
-        | 🔵 方法3:LightGBM | 单一机器学习 | +97% |
-        | 🟣 方法4:XGBoost+NN | 集成深度学习 | **+203%** |
+        | 🟢 方法1 | 冷热码+和值预测 | {roi_results.get("方法1", 0):.1f}% |
+        | 🟡 方法2 | 胆拖混合 | {roi_results.get("方法2", 0):.1f}% |
+        | 🔵 方法3 | LightGBM | {roi_results.get("方法3", 0):.1f}% |
+        | 🟣 方法4 | XGBoost+NN | {roi_results.get("方法4", 0):.1f}% |
+        | 🌟 方法5 | 综合模式（投票） | {ensemble_roi:.1f}% |
         """)
+        
+        # 显示最佳方法
+        best_method = max(roi_results, key=roi_results.get)
+        best_roi = roi_results[best_method]
+        if ensemble_roi > best_roi:
+            st.success(f"🏆 当前最佳：方法5 综合模式 (ROI: {ensemble_roi:.1f}%)")
+        else:
+            st.success(f"🏆 当前最佳：{best_method} (ROI: {best_roi:.1f}%)")
+        
+        # 显示更新时间
+        st.caption(f"📅 更新时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    else:
+        st.markdown(f"""
+        | 算法 | 特点 | 说明 |
+        |------|------|------|
+        | 🟢 方法1 | 冷热码+和值 | 数据不足，需≥{backtest_periods}期 |
+        | 🟡 方法2 | 胆拖混合 | 数据不足，需≥{backtest_periods}期 |
+        | 🔵 方法3 | LightGBM | 数据不足，需≥{backtest_periods}期 |
+        | 🟣 方法4 | XGBoost+NN | 数据不足，需≥{backtest_periods}期 |
+        | 🌟 方法5 | 综合模式 | 数据不足，需≥{backtest_periods}期 |
+        """)
+        st.warning(f"当前只有 {len(draws)} 期数据，需要至少 {backtest_periods} 期才能回测")
     
     # 奖金结构
     with st.expander("💰 奖金结构（7+1复式）"):
@@ -2363,7 +2413,62 @@ class BetGenerator:
             generator = Method1HotColdSum(draws)
         
         return generator.generate_bets(num_bets)
-
+    @staticmethod
+    def generate_ensemble(draws: List[Dict], num_bets: int = 4) -> List[Dict]:
+        """综合模式：运行4种方法，取高频号码"""
+        from collections import Counter
+        import random
+        
+        all_bets = []
+        methods = ["方法1：当前方法", "方法2：胆拖混合", "方法3：LightGBM", "方法4：XGBoost+NN集成"]
+        
+        for method in methods:
+            method_name = method.split("：")[0]  # 注意：您用的是中文冒号
+            try:
+                bets = BetGenerator.generate(method_name, draws, num_bets)
+                all_bets.extend(bets)
+            except Exception:
+                continue
+        
+        if not all_bets:
+            return BetGenerator.generate("方法1", draws, num_bets)
+        
+        # 统计所有红球号码频率
+        red_counter = Counter()
+        blue_counter = Counter()
+        
+        for bet in all_bets:
+            for red in bet['reds']:
+                red_counter[red] += 1
+            blue_counter[bet['blue']] += 1
+        
+        # 取频率最高的7个红球和1个蓝球
+        top_reds = [num for num, _ in red_counter.most_common(7)]
+        top_blue = blue_counter.most_common(1)[0][0] if blue_counter else 8
+        
+        top_reds.sort()
+        
+        # 生成4组有差异的组合
+        bets = []
+        for i in range(num_bets):
+            reds = top_reds.copy()
+            # 每组替换1-2个号码增加多样性
+            replace_count = min(i + 1, 2)
+            for _ in range(replace_count):
+                idx = random.randint(0, len(reds) - 1)
+                candidates = [n for n in range(1, 34) if n not in reds]
+                if candidates:
+                    reds[idx] = random.choice(candidates)
+            reds.sort()
+            
+            bets.append({
+                'reds': reds,
+                'blue': top_blue,
+                'sum': sum(reds),
+                'method': '方法5:综合模式'
+            })
+        
+        return bets
 
 # ==================== ROI回测函数 ====================
 def backtest_roi(draws: List[Dict], method: str, num_bets: int = 4, lookback: int = 50) -> Dict:
@@ -2670,9 +2775,9 @@ with col2:
     bet_type = st.selectbox("复式类型", ["7+1 (14元)", "7+2 (28元)", "8+1 (56元)"], key="bet_type")
 with col3:
     ai_model = st.selectbox(
-        "AI模型",
-        ["方法4: XGBoost+NN集成 ⭐推荐", "方法3: LightGBM", "方法2: 胆拖混合", "方法1: 当前方法"],
-        key="ai_model"
+    "AI模型",
+    ["方法5: 综合模式 ⭐推荐", "方法4: XGBoost+NN集成", "方法3: LightGBM", "方法2: 胆拖混合", "方法1: 当前方法"],
+    key="ai_model"
     )
 
 col1, col2 = st.columns(2)
@@ -2704,8 +2809,11 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
         np.random.seed()
     
     with st.spinner(f"正在使用 {ai_model} 生成投注..."):
-        method_name = ai_model.split(":")[0] if ":" in ai_model else ai_model
-        bets = BetGenerator.generate(method_name, draws, num_bets)
+        if "综合模式" in ai_model:
+    bets = BetGenerator.generate_ensemble(draws, num_bets)
+else:
+    method_name = ai_model.split(":")[0] if ":" in ai_model else ai_model
+    bets = BetGenerator.generate(method_name, draws, num_bets)
         st.session_state['generated_bets'] = bets
         st.session_state['model_used'] = ai_model
     st.success(f"✅ 使用 {ai_model} 生成 {len(bets)} 组投注")
