@@ -1199,7 +1199,6 @@ if not draws or len(draws) < 5:
     st.stop()
 
 # ==================== ROI回测函数 ====================
-# ==================== ROI回测函数 ====================
 def backtest_roi(draws: List[Dict], method: str, num_bets: int = 4, lookback: int = 50) -> Dict:
     """回测指定方法的ROI"""
     if len(draws) < lookback + 10:
@@ -1210,23 +1209,11 @@ def backtest_roi(draws: List[Dict], method: str, num_bets: int = 4, lookback: in
     win_count = 0
     prize_breakdown = {"first": 0, "second": 0, "third": 0, "fourth": 0, "fifth": 0, "sixth": 0, "fuyun": 0}
     
-    # 将方法名转换为 BetGenerator 期望的格式
-    method_full = {
-        "方法1": "方法1: 当前方法",
-        "方法2": "方法2: 胆拖混合",
-        "方法3": "方法3: LightGBM",
-        "方法4": "方法4: XGBoost+NN集成"
-    }.get(method, "方法1: 当前方法")
-    
     for i in range(lookback, len(draws)):
-        historical = draws[:i]
+        historical = draws[:i]   # 👈 修复：使用所有历史数据
         actual = draws[i]
         
-        try:
-            bets = BetGenerator.generate(method_full, historical, num_bets)
-        except Exception:
-            # 如果生成失败，跳过这一期
-            continue
+        bets = BetGenerator.generate(method, historical, num_bets)
         
         period_cost = num_bets * 14
         period_prize = 0
@@ -1276,6 +1263,113 @@ def backtest_roi(draws: List[Dict], method: str, num_bets: int = 4, lookback: in
         "periods": lookback,
         "prize_breakdown": prize_breakdown
     }
+# ==================== 侧边栏 ====================
+# ==================== 侧边栏 ====================
+with st.sidebar:
+    st.markdown("### 🎰 双色球AI分析工具")
+    st.markdown("---")
+    
+    # ML库状态
+    with st.expander("🤖 ML库状态", expanded=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            if LGB_AVAILABLE:
+                st.markdown("✅ **LightGBM**")
+            else:
+                st.markdown("❌ **LightGBM**")
+            if XGB_AVAILABLE:
+                st.markdown("✅ **XGBoost**")
+            else:
+                st.markdown("❌ **XGBoost**")
+        with col2:
+            if SKLEARN_AVAILABLE:
+                st.markdown("✅ **scikit-learn**")
+            else:
+                st.markdown("❌ **scikit-learn**")
+        st.caption(f"MCP服务: {'✅ 可用' if MCP_AVAILABLE else '❌ 不可用'}")
+    
+    # 四种算法对比
+    # 四种算法对比
+    # 五种AI算法对比（动态回测）
+    with st.expander("📖 五种AI算法对比（动态回测）"):
+        # 回测期数滑块和刷新按钮放在同一行
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            backtest_periods = st.slider(
+                "回测期数",
+                min_value=10,
+                max_value=min(200, len(draws) - 10) if len(draws) > 10 else 30,
+                value=30,
+                step=5,
+                key="sidebar_backtest_periods"
+            )
+        with col2:
+            if st.button("🔄 刷新ROI", use_container_width=True, key="refresh_roi_btn"):
+                st.cache_data.clear()
+                st.rerun()
+        
+        # 动态计算ROI
+        if len(draws) >= backtest_periods:
+            try:
+                roi_results = {}
+                for method in ["方法1", "方法2", "方法3", "方法4"]:
+                    result = backtest_roi(draws, method, num_bets=4, lookback=backtest_periods)
+                    roi_results[method] = result['roi']
+                
+                # 计算综合模式ROI（取方法2-4的平均）
+                ensemble_roi = (roi_results.get("方法2", 0) + roi_results.get("方法3", 0) + roi_results.get("方法4", 0)) / 3
+                
+                st.markdown(f"""
+                | 算法 | 特点 | {backtest_periods}期ROI |
+                |------|------|---------|
+                | 🟢 方法1 | 冷热码+和值预测 | {roi_results.get("方法1", 0):.1f}% |
+                | 🟡 方法2 | 胆拖混合 | {roi_results.get("方法2", 0):.1f}% |
+                | 🔵 方法3 | LightGBM | {roi_results.get("方法3", 0):.1f}% |
+                | 🟣 方法4 | XGBoost+NN | {roi_results.get("方法4", 0):.1f}% |
+                | 🌟 方法5 | 综合模式（投票） | {ensemble_roi:.1f}% |
+                """)
+                
+                # 显示最佳方法
+                best_method = max(roi_results, key=roi_results.get)
+                best_roi = roi_results[best_method]
+                if ensemble_roi > best_roi:
+                    st.success(f"🏆 当前最佳：方法5 综合模式 (ROI: {ensemble_roi:.1f}%)")
+                else:
+                    st.success(f"🏆 当前最佳：{best_method} (ROI: {best_roi:.1f}%)")
+                
+                from datetime import datetime
+                st.caption(f"📅 基于最近{backtest_periods}期回测")
+            except Exception as e:
+                st.error(f"回测计算失败: {e}")
+                st.info("请确保数据量足够（至少30期）")
+        else:
+            st.warning(f"当前只有 {len(draws)} 期数据，需要至少 {backtest_periods} 期才能回测")
+            st.markdown("""
+            | 算法 | 特点 | 说明 |
+            |------|------|------|
+            | 🟢 方法1 | 冷热码+和值 | 数据不足 |
+            | 🟡 方法2 | 胆拖混合 | 数据不足 |
+            | 🔵 方法3 | LightGBM | 数据不足 |
+            | 🟣 方法4 | XGBoost+NN | 数据不足 |
+            | 🌟 方法5 | 综合模式 | 数据不足 |
+            """)
+    
+    # 奖金结构
+    with st.expander("💰 奖金结构（7+1复式）"):
+        st.markdown("""
+        | 条件 | 7+1总奖金 |
+        |------|-----------|
+        | 中蓝球 | 35元 |
+        | 中3红 | 35元 (福运奖) |
+        | 中3+1 | 70元 |
+        | 中4+0 | 70元 |
+        | 中4+1 | 200-400元 |
+        | 中5+0 | 200-300元 |
+        | 中5+1 | 3000-9000元 |
+        """)
+    
+    st.markdown("---")
+    st.caption("DFSS智能选号工具 v11.0")
 
 # ==================== 主页面内容（注意：这里不能有缩进！）====================
 
@@ -1811,8 +1905,6 @@ print("第2部分加载完成")
 # ============================================================
 # 第3部分：完整的4种AI算法实现
 # ============================================================
-# 第3部分：完整的4种AI算法实现 + backtest_roi + 侧边栏
-# ============================================================
 
 # ==================== 方法1：冷热码评分 + 和值动态预测 ====================
 class Method1HotColdSum:
@@ -1892,6 +1984,7 @@ class Method1HotColdSum:
         red_scores = self.calculate_red_scores()
         blue_scores = self.calculate_blue_scores()
         
+        # 使用指数权重放大差异
         red_weights = np.array([math.exp(red_scores.get(i, 0)) for i in RED_NUMBERS])
         blue_weights = np.array([math.exp(blue_scores.get(i, 0)) for i in BLUE_NUMBERS])
         
@@ -1943,14 +2036,17 @@ class Method2DanTuo:
         self.method1 = Method1HotColdSum(draws)
     
     def select_anchors(self, num_anchors: int = 2) -> List[int]:
+        """选择胆码：结合上期红球、热区号码、高频号码"""
         red_scores = self.method1.calculate_red_scores()
         
+        # 上期红球加分
         if self.draws:
             last_reds = self.draws[-1].get('reds', [])
             for num in last_reds:
                 if num in red_scores:
                     red_scores[num] += 0.3
         
+        # 热区号码加分
         zone_heat = get_zone_heat(self.draws, 50)
         for zone_id, zone_info in zone_heat.items():
             if '🔥' in zone_info['heat_level']:
@@ -1958,6 +2054,7 @@ class Method2DanTuo:
                     if num in red_scores:
                         red_scores[num] += 0.2
         
+        # 近期高频号码加分（最近20期出现>=3次）
         recent_counts = {}
         for draw in self.draws[-20:]:
             for num in draw.get('reds', []):
@@ -1974,6 +2071,7 @@ class Method2DanTuo:
         red_scores = self.method1.calculate_red_scores()
         blue_scores = self.method1.calculate_blue_scores()
         
+        # 降低胆码的权重，避免重复
         for a in anchors:
             if a in red_scores:
                 red_scores[a] = 0.1
@@ -2044,15 +2142,18 @@ class Method3LightGBM:
         self.is_trained = False
     
     def _extract_features(self, window_draws: List[Dict], target_num: int) -> Optional[Dict]:
+        """提取特征用于LightGBM训练"""
         if len(window_draws) < 20:
             return None
         
         features = {}
         total = len(window_draws)
         
+        # 历史频率
         freq = sum(1 for d in window_draws if target_num in d.get('reds', []))
         features['freq'] = freq / total if total > 0 else 0
         
+        # 遗漏期数
         last_seen = None
         for idx, d in enumerate(reversed(window_draws)):
             if target_num in d.get('reds', []):
@@ -2060,13 +2161,16 @@ class Method3LightGBM:
                 break
         features['absence'] = last_seen if last_seen is not None else total
         
+        # 近期频率（最近10期）
         recent = window_draws[-10:] if len(window_draws) >= 10 else window_draws
         recent_freq = sum(1 for d in recent if target_num in d.get('reds', []))
         features['recent_freq'] = recent_freq / len(recent) if recent else 0
         
+        # 上期是否出现
         if window_draws:
             features['last_appeared'] = 1 if target_num in window_draws[-1].get('reds', []) else 0
         
+        # 分区信息
         zone = (target_num - 1) // 11 + 1
         features['zone'] = zone
         features['parity'] = target_num % 2
@@ -2075,6 +2179,7 @@ class Method3LightGBM:
         return features
     
     def train(self) -> bool:
+        """训练LightGBM模型"""
         if not LGB_AVAILABLE or len(self.draws) < 100:
             return False
         
@@ -2112,6 +2217,7 @@ class Method3LightGBM:
             return False
     
     def predict(self) -> List[int]:
+        """使用训练好的模型预测"""
         if not self.is_trained or not self.model:
             return []
         
@@ -2132,6 +2238,7 @@ class Method3LightGBM:
         return [num for num, _ in predictions[:6]]
     
     def generate_bets(self, num_bets: int = 4) -> List[Dict]:
+        """生成投注"""
         if not self.is_trained:
             self.train()
         
@@ -2156,6 +2263,7 @@ class Method3LightGBM:
                 extra = np.random.choice(missing, size=6-len(reds), replace=False)
                 reds.extend(extra)
             
+            # 随机替换1-2个号码增加多样性
             replace_count = np.random.randint(1, 3)
             for _ in range(replace_count):
                 idx = np.random.randint(0, len(reds))
@@ -2188,15 +2296,18 @@ class Method4Ensemble:
         self.is_trained = False
     
     def _extract_features_advanced(self, window_draws: List[Dict], target_num: int) -> Optional[Dict]:
+        """提取高级特征用于集成模型"""
         if len(window_draws) < 30:
             return None
         
         features = {}
         total = len(window_draws)
         
+        # 基础频率
         freq = sum(1 for d in window_draws if target_num in d.get('reds', []))
         features['freq'] = freq / total if total > 0 else 0
         
+        # 遗漏期数
         last_seen = None
         for idx, d in enumerate(reversed(window_draws)):
             if target_num in d.get('reds', []):
@@ -2205,11 +2316,13 @@ class Method4Ensemble:
         features['absence'] = last_seen if last_seen is not None else total
         features['absence_norm'] = features['absence'] / total if total > 0 else 0
         
+        # 多窗口频率
         for window in [3, 5, 10]:
             recent = window_draws[-window:] if len(window_draws) >= window else window_draws
             recent_freq = sum(1 for d in recent if target_num in d.get('reds', []))
             features[f'recent_{window}'] = recent_freq / len(recent) if recent else 0
         
+        # 与上期关系
         if window_draws:
             last_reds = window_draws[-1].get('reds', [])
             features['last_appeared'] = 1 if target_num in last_reds else 0
@@ -2218,6 +2331,7 @@ class Method4Ensemble:
             else:
                 features['min_diff_to_last'] = 99
         
+        # 分区和统计特征
         zone = (target_num - 1) // 11 + 1
         features['zone'] = zone
         features['parity'] = target_num % 2
@@ -2227,6 +2341,7 @@ class Method4Ensemble:
         return features
     
     def train(self) -> bool:
+        """训练XGBoost + 神经网络集成模型"""
         if (not XGB_AVAILABLE or not SKLEARN_AVAILABLE) or len(self.draws) < 150:
             return False
         
@@ -2250,6 +2365,7 @@ class Method4Ensemble:
         y_series = pd.Series(y_list)
         
         try:
+            # XGBoost
             self.xgb_model = xgb.XGBClassifier(
                 n_estimators=100,
                 max_depth=4,
@@ -2261,6 +2377,7 @@ class Method4Ensemble:
             )
             self.xgb_model.fit(X_df, y_series)
             
+            # 神经网络
             self.scaler = StandardScaler()
             X_scaled = self.scaler.fit_transform(X_df)
             self.nn_model = MLPClassifier(
@@ -2279,6 +2396,7 @@ class Method4Ensemble:
             return False
     
     def predict(self) -> List[int]:
+        """使用集成模型预测"""
         if not self.is_trained:
             return []
         
@@ -2309,6 +2427,7 @@ class Method4Ensemble:
         return [num for num, _ in predictions[:6]]
     
     def generate_bets(self, num_bets: int = 4) -> List[Dict]:
+        """生成投注"""
         if not self.is_trained:
             self.train()
         
@@ -2364,7 +2483,6 @@ class BetGenerator:
             generator = Method1HotColdSum(draws)
         
         return generator.generate_bets(num_bets)
-    
     @staticmethod
     def generate_ensemble(draws: List[Dict], num_bets: int = 4) -> List[Dict]:
         """综合模式：运行4种方法，取高频号码"""
@@ -2372,10 +2490,10 @@ class BetGenerator:
         import random
         
         all_bets = []
-        methods = ["方法1: 当前方法", "方法2: 胆拖混合", "方法3: LightGBM", "方法4: XGBoost+NN集成"]
+        methods = ["方法1：当前方法", "方法2：胆拖混合", "方法3：LightGBM", "方法4：XGBoost+NN集成"]
         
         for method in methods:
-            method_name = method.split(":")[0]
+            method_name = method.split("：")[0]  # 注意：您用的是中文冒号
             try:
                 bets = BetGenerator.generate(method_name, draws, num_bets)
                 all_bets.extend(bets)
@@ -2385,6 +2503,7 @@ class BetGenerator:
         if not all_bets:
             return BetGenerator.generate("方法1", draws, num_bets)
         
+        # 统计所有红球号码频率
         red_counter = Counter()
         blue_counter = Counter()
         
@@ -2393,14 +2512,17 @@ class BetGenerator:
                 red_counter[red] += 1
             blue_counter[bet['blue']] += 1
         
+        # 取频率最高的7个红球和1个蓝球
         top_reds = [num for num, _ in red_counter.most_common(7)]
         top_blue = blue_counter.most_common(1)[0][0] if blue_counter else 8
         
         top_reds.sort()
         
+        # 生成4组有差异的组合
         bets = []
         for i in range(num_bets):
             reds = top_reds.copy()
+            # 每组替换1-2个号码增加多样性
             replace_count = min(i + 1, 2)
             for _ in range(replace_count):
                 idx = random.randint(0, len(reds) - 1)
@@ -2417,181 +2539,6 @@ class BetGenerator:
             })
         
         return bets
-
-
-# ==================== ROI回测函数 ====================
-def backtest_roi(draws: List[Dict], method: str, num_bets: int = 4, lookback: int = 50) -> Dict:
-    """回测指定方法的ROI"""
-    if len(draws) < lookback + 10:
-        return {"roi": 0, "total_cost": 0, "total_prize": 0, "net": 0, "win_rate": 0}
-    
-    total_cost = 0
-    total_prize = 0
-    win_count = 0
-    prize_breakdown = {"first": 0, "second": 0, "third": 0, "fourth": 0, "fifth": 0, "sixth": 0, "fuyun": 0}
-    
-    # 将方法名转换为 BetGenerator 期望的格式
-    method_full = {
-        "方法1": "方法1: 当前方法",
-        "方法2": "方法2: 胆拖混合",
-        "方法3": "方法3: LightGBM",
-        "方法4": "方法4: XGBoost+NN集成"
-    }.get(method, "方法1: 当前方法")
-    
-    for i in range(lookback, len(draws)):
-        historical = draws[:i]
-        actual = draws[i]
-        
-        try:
-            bets = BetGenerator.generate(method_full, historical, num_bets)
-        except Exception:
-            continue
-        
-        period_cost = num_bets * 14
-        period_prize = 0
-        
-        for bet in bets:
-            red_matches = len(set(bet['reds']) & set(actual['reds'])) if actual.get('reds') else 0
-            blue_match = (bet['blue'] == actual.get('blue', 0)) if actual.get('blue') else False
-            
-            if red_matches == 6 and blue_match:
-                period_prize += 5000000
-                prize_breakdown["first"] += 1
-            elif red_matches == 6:
-                period_prize += 500000
-                prize_breakdown["second"] += 1
-            elif red_matches == 5 and blue_match:
-                period_prize += 3000
-                prize_breakdown["third"] += 1
-            elif red_matches == 5 or (red_matches == 4 and blue_match):
-                period_prize += 200
-                prize_breakdown["fourth"] += 1
-            elif red_matches == 4 or (red_matches == 3 and blue_match):
-                period_prize += 10
-                prize_breakdown["fifth"] += 1
-            elif blue_match:
-                period_prize += 5
-                prize_breakdown["sixth"] += 1
-            elif red_matches == 3:
-                period_prize += 5
-                prize_breakdown["fuyun"] += 1
-        
-        total_cost += period_cost
-        total_prize += period_prize
-        
-        if period_prize > 0:
-            win_count += 1
-    
-    net = total_prize - total_cost
-    roi = (net / total_cost) * 100 if total_cost > 0 else 0
-    win_rate = (win_count / lookback) * 100 if lookback > 0 else 0
-    
-    return {
-        "roi": roi,
-        "total_cost": total_cost,
-        "total_prize": total_prize,
-        "net": net,
-        "win_rate": win_rate,
-        "periods": lookback,
-        "prize_breakdown": prize_breakdown
-    }
-
-
-# ==================== 侧边栏（移到这里，在 backtest_roi 之后） ====================
-with st.sidebar:
-    st.markdown("### 🎰 双色球AI分析工具")
-    st.markdown("---")
-    
-    # ML库状态
-    with st.expander("🤖 ML库状态", expanded=False):
-        col1, col2 = st.columns(2)
-        with col1:
-            if LGB_AVAILABLE:
-                st.markdown("✅ **LightGBM**")
-            else:
-                st.markdown("❌ **LightGBM**")
-            if XGB_AVAILABLE:
-                st.markdown("✅ **XGBoost**")
-            else:
-                st.markdown("❌ **XGBoost**")
-        with col2:
-            if SKLEARN_AVAILABLE:
-                st.markdown("✅ **scikit-learn**")
-            else:
-                st.markdown("❌ **scikit-learn**")
-        st.caption(f"MCP服务: {'✅ 可用' if MCP_AVAILABLE else '❌ 不可用'}")
-    
-    # 五种AI算法对比（动态回测）
-    with st.expander("📖 五种AI算法对比（动态回测）"):
-        col1, col2 = st.columns([3, 1])
-        with col1:
-                backtest_periods = st.slider(
-        "回测期数",
-        min_value=10,
-        max_value=min(200, len(draws)-10) if len(draws) > 10 else 30,
-        value=30,
-        step=5,
-        key="sidebar_backtest_periods"
-    )
-         
-        if len(draws) >= backtest_periods:
-            try:
-                roi_results = {}
-                for method in ["方法1", "方法2", "方法3", "方法4"]:
-                    result = backtest_roi(draws, method, num_bets=4, lookback=backtest_periods)
-                    roi_results[method] = result['roi']
-                
-                ensemble_roi = (roi_results.get("方法2", 0) + roi_results.get("方法3", 0) + roi_results.get("方法4", 0)) / 3
-                
-                st.markdown(f"""
-                | 算法 | 特点 | {backtest_periods}期ROI |
-                |------|------|---------|
-                | 🟢 方法1 | 冷热码+和值预测 | {roi_results.get("方法1", 0):.1f}% |
-                | 🟡 方法2 | 胆拖混合 | {roi_results.get("方法2", 0):.1f}% |
-                | 🔵 方法3 | LightGBM | {roi_results.get("方法3", 0):.1f}% |
-                | 🟣 方法4 | XGBoost+NN | {roi_results.get("方法4", 0):.1f}% |
-                | 🌟 方法5 | 综合模式（投票） | {ensemble_roi:.1f}% |
-                """)
-                
-                best_method = max(roi_results, key=roi_results.get)
-                best_roi = roi_results[best_method]
-                if ensemble_roi > best_roi:
-                    st.success(f"🏆 当前最佳：方法5 综合模式 (ROI: {ensemble_roi:.1f}%)")
-                else:
-                    st.success(f"🏆 当前最佳：{best_method} (ROI: {best_roi:.1f}%)")
-                
-                from datetime import datetime
-                st.caption(f"📅 基于最近{backtest_periods}期回测")
-            except Exception as e:
-                st.error(f"回测计算失败: {e}")
-        else:
-            st.warning(f"当前只有 {len(draws)} 期数据，需要至少 {backtest_periods} 期才能回测")
-            st.markdown("""
-            | 算法 | 特点 | 说明 |
-            |------|------|------|
-            | 🟢 方法1 | 冷热码+和值 | 数据不足 |
-            | 🟡 方法2 | 胆拖混合 | 数据不足 |
-            | 🔵 方法3 | LightGBM | 数据不足 |
-            | 🟣 方法4 | XGBoost+NN | 数据不足 |
-            | 🌟 方法5 | 综合模式 | 数据不足 |
-            """)
-    
-    # 奖金结构
-    with st.expander("💰 奖金结构（7+1复式）"):
-        st.markdown("""
-        | 条件 | 7+1总奖金 |
-        |------|-----------|
-        | 中蓝球 | 35元 |
-        | 中3红 | 35元 (福运奖) |
-        | 中3+1 | 70元 |
-        | 中4+0 | 70元 |
-        | 中4+1 | 200-400元 |
-        | 中5+0 | 200-300元 |
-        | 中5+1 | 3000-9000元 |
-        """)
-    
-    st.markdown("---")
-    st.caption("DFSS智能选号工具 v11.0")
 
 print("第3部分加载完成")
 
