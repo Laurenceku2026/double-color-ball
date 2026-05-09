@@ -196,7 +196,8 @@ def load_all_from_supabase() -> Optional[List[Dict]]:
             .select("*")\
             .order("period", desc=False)\
             .execute()
-        
+        # 👇 添加调试代码
+        st.write(f"API 返回行数: {len(response.data)}")
         if not response.data:
             return None
         
