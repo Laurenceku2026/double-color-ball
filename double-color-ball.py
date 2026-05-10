@@ -2420,9 +2420,9 @@ def _extract_features_advanced(self, window_draws: List[Dict], target_num: int) 
             self.scaler = StandardScaler()
             X_scaled = self.scaler.fit_transform(X_df)
             self.nn_model = MLPClassifier(
-                hidden_layer_sizes=(32, 16),
-                activation='relu',
-                max_iter=100,
+                hidden_layer_sizes=(16, 8),      # 从 (32,16) 减少到 (16,8)
+                activation='tanh',                # 从 relu 改为 tanh（更平滑）
+                max_iter=50,                      # 从 100 减少
                 random_state=42,
                 early_stopping=True,
                 validation_fraction=0.1
