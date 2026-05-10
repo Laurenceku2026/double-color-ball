@@ -1,6 +1,6 @@
 # ============================================================
-# 双色球AI智能选号工具 v11.0 完整版
-# 第1部分：导入、配置、Supabase连接、数据管理、管理员页面
+# 双色球AI智能选号工具 v12.0 完整版
+# 第1部分：导入、配置、Supabase连接、数据管理、ML预测缓存表
 # ============================================================
 
 import streamlit as st
@@ -24,7 +24,6 @@ from supabase import create_client, Client
 
 warnings.filterwarnings('ignore')
 
-# ==================== 尝试导入ML库 ====================
 # ==================== 尝试导入ML库（健壮版） ====================
 LGB_AVAILABLE = False
 XGB_AVAILABLE = False
@@ -38,7 +37,6 @@ try:
     print("✅ LightGBM 导入成功")
 except ImportError as e:
     print(f"❌ LightGBM 导入失败: {e}")
-    LGB_AVAILABLE = False
 
 # XGBoost
 try:
@@ -47,7 +45,6 @@ try:
     print("✅ XGBoost 导入成功")
 except ImportError as e:
     print(f"❌ XGBoost 导入失败: {e}")
-    XGB_AVAILABLE = False
 
 # scikit-learn
 try:
@@ -59,7 +56,6 @@ try:
     print("✅ scikit-learn 导入成功")
 except ImportError as e:
     print(f"❌ scikit-learn 导入失败: {e}")
-    SKLEARN_AVAILABLE = False
 
 # MCP服务（可选）
 try:
@@ -68,7 +64,7 @@ try:
     print("✅ MCP服务 导入成功")
 except ImportError as e:
     print(f"❌ MCP服务 导入失败: {e}")
-    MCP_AVAILABLE = False
+
 # ==================== 页面配置 ====================
 st.set_page_config(
     page_title="双色球AI分析工具 - 专业版",
@@ -77,7 +73,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ==================== 自定义CSS ====================
+# ==================== 自定义CSS（移除图片卡片样式） ====================
 st.markdown("""
 <style>
     .stDataFrame { text-align: center; }
@@ -99,45 +95,6 @@ st.markdown("""
         color: white;
         margin: 10px 0;
     }
-    .bet-card {
-        background-color: #f0f2f6;
-        border-radius: 10px;
-        padding: 15px;
-        margin: 5px;
-        text-align: center;
-    }
-    .red-ball {
-        display: inline-block;
-        width: 36px;
-        height: 36px;
-        line-height: 36px;
-        text-align: center;
-        background: linear-gradient(135deg, #ff6b6b, #ee5a5a);
-        color: white;
-        border-radius: 50%;
-        margin: 2px;
-        font-weight: bold;
-    }
-    .blue-ball {
-        display: inline-block;
-        width: 36px;
-        height: 36px;
-        line-height: 36px;
-        text-align: center;
-        background: linear-gradient(135deg, #4facfe, #00f2fe);
-        color: white;
-        border-radius: 50%;
-        margin: 2px;
-        font-weight: bold;
-    }
-    .zone-hot { background-color: #ff6b6b; color: white; padding: 4px 8px; border-radius: 15px; display: inline-block; margin: 2px; }
-    .zone-cold { background-color: #4d4d4d; color: white; padding: 4px 8px; border-radius: 15px; display: inline-block; margin: 2px; }
-    .zone-medium { background-color: #ffa500; color: white; padding: 4px 8px; border-radius: 15px; display: inline-block; margin: 2px; }
-    .signal-high { background-color: #ff4b4b; color: white; padding: 5px 10px; border-radius: 20px; display: inline-block; }
-    .signal-medium { background-color: #ffa500; color: white; padding: 5px 10px; border-radius: 20px; display: inline-block; }
-    .signal-low { background-color: #00cc66; color: white; padding: 5px 10px; border-radius: 20px; display: inline-block; }
-    .stButton button { width: 100%; }
-    div[data-testid="stExpander"] div[role="button"] p { font-size: 1.1rem; font-weight: bold; }
     .data-status-card {
         background-color: #f8f9fa;
         border-radius: 10px;
@@ -182,6 +139,75 @@ def init_supabase() -> Optional[Client]:
         supabase_key = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
         return create_client(supabase_url, supabase_key)
     except Exception:
+        return None
+
+# ==================== ML预测缓存表创建 ====================
+def check_ml_predictions_table() -> bool:
+    """检查ml_predictions表是否存在"""
+    supabase = init_supabase()
+    if supabase is None:
+        return False
+    try:
+        supabase.schema('ssq_schema').table('ml_predictions').select("id").limit(1).execute()
+        return True
+    except Exception:
+        return False
+# ==================== ML预测缓存操作函数 ====================
+def save_ml_prediction_to_cache(model_name: str, prediction_data: Dict, training_periods: int):
+    """保存ML预测结果到缓存"""
+    supabase = init_supabase()
+    if supabase is None:
+        return False
+    
+    try:
+        # 先停用同模型的旧记录
+        supabase.schema('ssq_schema').table('ml_predictions')\
+            .update({"is_active": False})\
+            .eq("model_name", model_name)\
+            .eq("is_active", True)\
+            .execute()
+        
+        # 插入新记录
+        data = {
+            "model_name": model_name,
+            "prediction_data": json.dumps(prediction_data),
+            "training_periods": training_periods,
+            "trained_at": datetime.now().isoformat(),
+            "expires_at": (datetime.now() + timedelta(days=7)).isoformat(),  # 7天过期
+            "is_active": True
+        }
+        supabase.schema('ssq_schema').table('ml_predictions').insert(data).execute()
+        return True
+    except Exception as e:
+        print(f"保存ML预测缓存失败: {e}")
+        return False
+
+def load_ml_prediction_from_cache(model_name: str, max_age_hours: int = 24) -> Optional[Dict]:
+    """从缓存加载ML预测结果（24小时内有效）"""
+    supabase = init_supabase()
+    if supabase is None:
+        return None
+    
+    try:
+        cutoff_time = (datetime.now() - timedelta(hours=max_age_hours)).isoformat()
+        response = supabase.schema('ssq_schema').table('ml_predictions')\
+            .select("*")\
+            .eq("model_name", model_name)\
+            .eq("is_active", True)\
+            .gt("trained_at", cutoff_time)\
+            .order("trained_at", desc=True)\
+            .limit(1)\
+            .execute()
+        
+        if response.data:
+            return {
+                "prediction_data": json.loads(response.data[0]["prediction_data"]),
+                "training_periods": response.data[0]["training_periods"],
+                "trained_at": response.data[0]["trained_at"]
+            }
+        return None
+    except Exception as e:
+        print(f"加载ML预测缓存失败: {e}")
         return None
 
 # ==================== 数据加载函数 ====================
@@ -287,19 +313,45 @@ def save_draws_to_supabase(draws: List[Dict], overwrite: bool = True) -> int:
         st.error(f"保存失败: {e}")
         return 0
 
-def save_draws_to_supabase_upsert(draws: List[Dict]) -> int:
-    """仅新增/更新：按期号存在则更新，不存在则插入（不删除任何数据）"""
+def incremental_sync_draws(draws: List[Dict]) -> Dict:
+    """增量同步：只更新变更的数据（新增、修改、删除）
+    返回: {"inserted": n, "updated": n, "deleted": n}
+    """
     if not draws:
-        return 0
+        return {"inserted": 0, "updated": 0, "deleted": 0}
     
     supabase = init_supabase()
     if supabase is None:
-        return 0
+        return {"inserted": 0, "updated": 0, "deleted": 0}
     
-    saved_count = 0
-    updated_count = 0
-    inserted_count = 0
+    # 获取数据库中现有期号
+    existing_response = supabase.schema('ssq_schema').table('ssq_draws')\
+        .select("period").execute()
+    existing_periods = {row["period"] for row in existing_response.data} if existing_response.data else set()
     
+    # 新数据中的期号
+    new_periods = {draw.get('period') for draw in draws if draw.get('period') is not None}
+    
+    # 需要删除的期号（数据库有但新数据没有）
+    to_delete = existing_periods - new_periods
+    
+    # 需要更新/插入的期号
+    to_sync = new_periods
+    
+    inserted = 0
+    updated = 0
+    deleted = 0
+    
+    # 执行删除
+    for period in to_delete:
+        try:
+            supabase.schema('ssq_schema').table('ssq_draws')\
+                .delete().eq("period", period).execute()
+            deleted += 1
+        except Exception as e:
+            st.warning(f"删除期号 {period} 失败: {e}")
+    
+    # 执行更新/插入
     for draw in draws:
         period = draw.get('period')
         if period is None:
@@ -325,32 +377,20 @@ def save_draws_to_supabase_upsert(draws: List[Dict]) -> int:
         }
         
         try:
-            # 检查是否存在
-            existing = supabase.schema('ssq_schema').table('ssq_draws')\
-                .select("period").eq("period", period).execute()
-            
-            if existing.data:
+            if period in existing_periods:
                 # 更新
                 supabase.schema('ssq_schema').table('ssq_draws')\
                     .update(data).eq("period", period).execute()
-                updated_count += 1
+                updated += 1
             else:
                 # 插入
                 supabase.schema('ssq_schema').table('ssq_draws')\
                     .insert(data).execute()
-                inserted_count += 1
-            
-            saved_count += 1
+                inserted += 1
         except Exception as e:
-            st.warning(f"保存期号 {period} 失败: {e}")
-            continue
+            st.warning(f"同步期号 {period} 失败: {e}")
     
-    if inserted_count > 0:
-        st.info(f"新增 {inserted_count} 期")
-    if updated_count > 0:
-        st.info(f"更新 {updated_count} 期")
-    
-    return saved_count
+    return {"inserted": inserted, "updated": updated, "deleted": deleted}
 
 # ==================== 数据格式转换（用于编辑框） ====================
 def draw_to_text_line(draw: Dict) -> str:
@@ -466,6 +506,15 @@ def fill_missing_with_history(draws: List[Dict], window: int = 20) -> List[Dict]
     
     return draws
 
+
+print("第1部分加载完成")
+print("=" * 60)
+print("请确认第1部分代码，输入 CONFIRM 后继续第2部分")
+print("=" * 60)
+# ============================================================
+# 第2部分：管理员页面优化 + ML预测缓存集成 + 回测逻辑修正准备
+# ============================================================
+
 # ==================== 管理员函数 ====================
 def check_password(password: str) -> bool:
     return hmac.compare_digest(password, "Ku_product$2026")
@@ -489,6 +538,7 @@ def admin_logout():
         st.session_state['admin_logged_in'] = False
         st.session_state['show_admin'] = False
         st.rerun()
+
 # ==================== Excel解析器 ====================
 def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
     """解析用户上传的Excel文件 - 完整15列"""
@@ -502,9 +552,7 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
         
         df = pd.read_excel(uploaded_file, sheet_name=0)
         
-        # ========== 调试：打印读取到的列名（测试后可删除） ==========
-                
-        # ========== 列名匹配 ==========
+        # 列名匹配
         period_col = None
         date_col = None
         red_cols = []
@@ -525,14 +573,11 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
             elif '开奖日期' in col_str or '日期' in col_str:
                 date_col = col
             elif '红1' in col_str or '红球1' in col_str:
-                # 红球列：收集红1到红6
                 for i in range(1, 7):
                     red_check = f'红{i}'
                     if red_check in df.columns:
                         if red_check not in red_cols:
                             red_cols.append(red_check)
-                    elif f'红球{i}' in str(df.columns.tolist()):
-                        pass
             elif '蓝球' in col_str:
                 blue_col = col
             elif '奖池' in col_str and '奖金' in col_str:
@@ -552,39 +597,32 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
         if len(red_cols) != 6:
             if len(df.columns) >= 8:
                 red_cols = df.columns[2:8].tolist()
-                        
+        
         # 如果期号列没找到，取第一列
         if period_col is None:
             period_col = df.columns[0]
-                    
+        
         # 如果日期列没找到且第二列存在，取第二列
         if date_col is None and len(df.columns) > 1:
             date_col = df.columns[1]
-                    
+        
         # 如果蓝球列没找到且第九列存在，取第九列
         if blue_col is None and len(df.columns) > 8:
             blue_col = df.columns[8]
-                    
+        
         # 验证红球列
         if len(red_cols) != 6:
             st.error(f"无法识别红球列，找到{len(red_cols)}列，需要6列")
             st.info(f"找到的红球列: {red_cols}")
             return None
         
-        # ========== 辅助函数：安全转换数字 ==========
         def safe_int_convert(val):
-            """安全转换为整数，处理文本格式、逗号、空格等"""
             if pd.isna(val):
                 return 0
             if isinstance(val, (int, float)):
                 return int(val)
-            # 转为字符串并清理
             val_str = str(val).strip()
-            # 去除千位分隔符逗号
-            val_str = val_str.replace(',', '')
-            # 去除空格
-            val_str = val_str.replace(' ', '')
-            # 去除换行符
+            val_str = val_str.replace(',', '').replace(' ', '')
             val_str = val_str.replace('\n', '').replace('\r', '')
             if val_str == '' or val_str == '0':
                 return 0
@@ -593,21 +631,18 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
             except:
                 return 0
         
-        # ========== 解析数据行 ==========
         draws = []
         error_count = 0
         skipped_count = 0
         
         for idx, row in df.iterrows():
             try:
-                # 期号
                 period_val = row[period_col]
                 if pd.isna(period_val):
                     skipped_count += 1
                     continue
                 period = int(period_val) if str(period_val).isdigit() else str(period_val)
                 
-                # 日期
                 date = None
                 if date_col and pd.notna(row[date_col]):
                     date_val = row[date_col]
@@ -616,7 +651,6 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
                     else:
                         date = str(date_val).split()[0] if ' ' in str(date_val) else str(date_val)
                 
-                # 红球
                 reds = []
                 for col in red_cols[:6]:
                     val = row[col]
@@ -628,37 +662,30 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
                     continue
                 reds = sorted(reds)
                 
-                # 蓝球
                 blue = 0
                 if blue_col and pd.notna(row[blue_col]):
                     blue = safe_int_convert(row[blue_col])
                 
-                # 奖池
                 pool = 0
                 if pool_col and pd.notna(row[pool_col]):
                     pool = safe_int_convert(row[pool_col])
                 
-                # 销量
                 sales = 0
                 if sales_col and pd.notna(row[sales_col]):
                     sales = safe_int_convert(row[sales_col])
                 
-                # 一等奖注数
                 prize1_count = 0
                 if prize1_count_col and pd.notna(row[prize1_count_col]):
                     prize1_count = safe_int_convert(row[prize1_count_col])
                 
-                # 一等奖奖金
                 prize1_amount = 0
                 if prize1_amount_col and pd.notna(row[prize1_amount_col]):
                     prize1_amount = safe_int_convert(row[prize1_amount_col])
                 
-                # 二等奖注数
                 prize2_count = 0
                 if prize2_count_col and pd.notna(row[prize2_count_col]):
                     prize2_count = safe_int_convert(row[prize2_count_col])
                 
-                # 二等奖奖金
                 prize2_amount = 0
                 if prize2_amount_col and pd.notna(row[prize2_amount_col]):
                     prize2_amount = safe_int_convert(row[prize2_amount_col])
@@ -680,7 +707,6 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
                 error_count += 1
                 continue
         
-        # ========== 显示解析统计 ==========
         if draws:
             st.success(f"成功解析 {len(draws)} 期数据")
             if skipped_count > 0:
@@ -696,11 +722,12 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
         st.error(f"Excel解析错误: {e}")
         return None
 
+# ==================== 管理员页面 ====================
 def show_admin_page():
-    """管理员页面 - 可编辑表格（使用 st.form 确保数据完整性）"""
+    """管理员页面 - 可编辑表格（支持覆盖保存和增量同步）"""
     
     st.subheader("📋 数据编辑器")
-    st.caption("💡 双击单元格编辑 | 表格底部有 '+' 按钮添加新行 | 编辑完成后点击【保存】")
+    st.caption("💡 双击单元格编辑 | 表格底部有 '+' 按钮添加新行 | 选择保存模式")
     
     # 定义固定列名（15列）
     columns = [
@@ -766,7 +793,6 @@ def show_admin_page():
                 if draws:
                     draws = fill_missing_with_history(draws)
                     st.session_state['draws_loaded'] = draws
-                    # 清除编辑器缓存
                     st.session_state.pop('ssq_data_editor', None)
                     st.success(f"加载 {len(draws)} 期数据")
                     st.rerun()
@@ -785,21 +811,24 @@ def show_admin_page():
             key="ssq_data_editor"
         )
         
-        # 保存按钮在 form 内部
-        submitted = st.form_submit_button("💾 保存到数据库", type="primary", use_container_width=True)
+        # 两个保存按钮放在同一行
+        col_save1, col_save2, col_spacer = st.columns([1, 1, 3])
         
-        if submitted:
+        with col_save1:
+            overwrite_submitted = st.form_submit_button("💾 全量覆盖保存", type="primary", use_container_width=True)
+        with col_save2:
+            incremental_submitted = st.form_submit_button("🔄 增量同步保存", use_container_width=True)
+        
+        if overwrite_submitted:
             if edited_df is None or len(edited_df) == 0:
                 st.error("没有数据可保存")
             else:
-                with st.spinner("正在保存..."):
-                    # 转换 DataFrame 为 draws 列表
+                with st.spinner("正在执行全量覆盖保存..."):
                     new_draws = []
                     errors = 0
                     
                     for idx, row in edited_df.iterrows():
                         try:
-                            # 检查期号是否有效
                             if pd.isna(row['期号']) or row['期号'] == 0:
                                 continue
                             
@@ -823,7 +852,6 @@ def show_admin_page():
                             prize2_count = int(row['二等奖注数']) if pd.notna(row['二等奖注数']) else 0
                             prize2_amount = int(row['二等奖奖金(元)']) if pd.notna(row['二等奖奖金(元)']) else 0
                             
-                            # 验证红球范围
                             valid_reds = all(1 <= r <= 33 for r in reds if r > 0)
                             valid_blue = 1 <= blue <= 16 if blue > 0 else True
                             
@@ -849,16 +877,84 @@ def show_admin_page():
                         st.warning(f"跳过 {errors} 行无效数据（红球1-33，蓝球1-16）")
                     
                     if new_draws:
-                        # 先清空再保存
                         saved = save_draws_to_supabase(new_draws, overwrite=True)
                         if saved > 0:
                             st.session_state['draws_loaded'] = new_draws
-                            st.success(f"保存 {saved} 期数据成功！")
+                            st.success(f"全量覆盖保存 {saved} 期数据成功！")
                             st.rerun()
                         else:
                             st.error("保存失败")
                     else:
                         st.error("没有有效数据可保存")
+        
+        if incremental_submitted:
+            if edited_df is None or len(edited_df) == 0:
+                st.error("没有数据可同步")
+            else:
+                with st.spinner("正在执行增量同步..."):
+                    new_draws = []
+                    errors = 0
+                    
+                    for idx, row in edited_df.iterrows():
+                        try:
+                            if pd.isna(row['期号']) or row['期号'] == 0:
+                                continue
+                            
+                            period = int(row['期号'])
+                            date = str(row['开奖日期']) if pd.notna(row['开奖日期']) and row['开奖日期'] != '' else None
+                            
+                            reds = [
+                                int(row['红1']) if pd.notna(row['红1']) else 0,
+                                int(row['红2']) if pd.notna(row['红2']) else 0,
+                                int(row['红3']) if pd.notna(row['红3']) else 0,
+                                int(row['红4']) if pd.notna(row['红4']) else 0,
+                                int(row['红5']) if pd.notna(row['红5']) else 0,
+                                int(row['红6']) if pd.notna(row['红6']) else 0,
+                            ]
+                            
+                            blue = int(row['蓝球']) if pd.notna(row['蓝球']) else 0
+                            pool = int(row['奖池奖金(元)']) if pd.notna(row['奖池奖金(元)']) else 0
+                            sales = int(row['总投注额(元)']) if pd.notna(row['总投注额(元)']) else 0
+                            prize1_count = int(row['一等奖注数']) if pd.notna(row['一等奖注数']) else 0
+                            prize1_amount = int(row['一等奖奖金(元)']) if pd.notna(row['一等奖奖金(元)']) else 0
+                            prize2_count = int(row['二等奖注数']) if pd.notna(row['二等奖注数']) else 0
+                            prize2_amount = int(row['二等奖奖金(元)']) if pd.notna(row['二等奖奖金(元)']) else 0
+                            
+                            valid_reds = all(1 <= r <= 33 for r in reds if r > 0)
+                            valid_blue = 1 <= blue <= 16 if blue > 0 else True
+                            
+                            if valid_reds and valid_blue:
+                                new_draws.append({
+                                    'period': period,
+                                    'date': date,
+                                    'reds': sorted(reds),
+                                    'blue': blue,
+                                    'pool': pool,
+                                    'sales': sales,
+                                    'prize1_count': prize1_count,
+                                    'prize1_amount': prize1_amount,
+                                    'prize2_count': prize2_count,
+                                    'prize2_amount': prize2_amount
+                                })
+                            else:
+                                errors += 1
+                        except Exception:
+                            errors += 1
+                    
+                    if errors > 0:
+                        st.warning(f"跳过 {errors} 行无效数据")
+                    
+                    if new_draws:
+                        result = incremental_sync_draws(new_draws)
+                        st.success(f"增量同步完成：新增 {result['inserted']} 期，更新 {result['updated']} 期，删除 {result['deleted']} 期")
+                        # 重新加载数据到session
+                        refreshed_draws = load_all_from_supabase()
+                        if refreshed_draws:
+                            refreshed_draws = fill_missing_with_history(refreshed_draws)
+                            st.session_state['draws_loaded'] = refreshed_draws
+                        st.rerun()
+                    else:
+                        st.error("没有有效数据可同步")
     
     st.markdown("---")
     
@@ -870,7 +966,7 @@ def show_admin_page():
         "选择Excel文件",
         type=['xlsx', 'xls'],
         key="excel_uploader_admin",
-        help="上传Excel文件，将替换当前所有数据"
+        help="上传Excel文件"
     )
     
     if uploaded_file is not None:
@@ -894,7 +990,7 @@ def show_admin_page():
                 
                 col_confirm, col_cancel = st.columns(2)
                 with col_confirm:
-                    if st.button("✅ 确认保存到数据库", type="primary"):
+                    if st.button("✅ 确认全量覆盖", type="primary"):
                         excel_draws = fill_missing_with_history(excel_draws)
                         excel_draws.sort(key=lambda x: x.get('period', 0))
                         saved = save_draws_to_supabase(excel_draws, overwrite=True)
@@ -921,11 +1017,15 @@ if 'draws_loaded' not in st.session_state:
     st.session_state['draws_loaded'] = None
 if 'analysis_started' not in st.session_state:
     st.session_state['analysis_started'] = False
+if 'ml_predictions_cache' not in st.session_state:
+    st.session_state['ml_predictions_cache'] = {}
+if 'last_training_time' not in st.session_state:
+    st.session_state['last_training_time'] = None
 
 # ==================== 主页面标题 ====================
 col_title, col_settings = st.columns([0.9, 0.1])
 with col_title:
-    st.title("🎯 双色球AI智能选号工具 - 专业版")
+    st.title("🎯 双色球AI智能选号工具 - 专业版 v12.0")
 with col_settings:
     if st.button("⚙️ 管理员", key="settings_icon", help="管理员设置"):
         st.session_state['show_admin'] = not st.session_state.get('show_admin', False)
@@ -963,211 +1063,16 @@ if not draws or len(draws) < 5:
     """, unsafe_allow_html=True)
     st.stop()
 
-# ==================== ROI回测函数 ====================
-def backtest_roi(draws: List[Dict], method: str, num_bets: int = 4, lookback: int = 50) -> Dict:
-    """回测指定方法的ROI"""
-    if len(draws) < lookback + 10:
-        return {"roi": 0, "total_cost": 0, "total_prize": 0, "net": 0, "win_rate": 0}
-    
-    total_cost = 0
-    total_prize = 0
-    win_count = 0
-    prize_breakdown = {"first": 0, "second": 0, "third": 0, "fourth": 0, "fifth": 0, "sixth": 0, "fuyun": 0}
-    
-    for i in range(lookback, len(draws)):
-        historical = draws[:i]   # 👈 修复：使用所有历史数据
-        actual = draws[i]
-        
-        bets = BetGenerator.generate(method, historical, num_bets)
-        
-        period_cost = num_bets * 14
-        period_prize = 0
-        
-        for bet in bets:
-            red_matches = len(set(bet['reds']) & set(actual['reds'])) if actual.get('reds') else 0
-            blue_match = (bet['blue'] == actual.get('blue', 0)) if actual.get('blue') else False
-            
-            if red_matches == 6 and blue_match:
-                period_prize += 5000000
-                prize_breakdown["first"] += 1
-            elif red_matches == 6:
-                period_prize += 500000
-                prize_breakdown["second"] += 1
-            elif red_matches == 5 and blue_match:
-                period_prize += 3000
-                prize_breakdown["third"] += 1
-            elif red_matches == 5 or (red_matches == 4 and blue_match):
-                period_prize += 200
-                prize_breakdown["fourth"] += 1
-            elif red_matches == 4 or (red_matches == 3 and blue_match):
-                period_prize += 10
-                prize_breakdown["fifth"] += 1
-            elif blue_match:
-                period_prize += 5
-                prize_breakdown["sixth"] += 1
-            elif red_matches == 3:
-                period_prize += 5
-                prize_breakdown["fuyun"] += 1
-        
-        total_cost += period_cost
-        total_prize += period_prize
-        
-        if period_prize > 0:
-            win_count += 1
-    
-    net = total_prize - total_cost
-    roi = (net / total_cost) * 100 if total_cost > 0 else 0
-    win_rate = (win_count / lookback) * 100 if lookback > 0 else 0
-    
-    return {
-        "roi": roi,
-        "total_cost": total_cost,
-        "total_prize": total_prize,
-        "net": net,
-        "win_rate": win_rate,
-        "periods": lookback,
-        "prize_breakdown": prize_breakdown
-    }
-# ==================== 侧边栏 ====================
-# ==================== 侧边栏 ====================
-with st.sidebar:
-    st.markdown("### 🎰 双色球AI分析工具")
-    st.markdown("---")
-    
-    # ML库状态
-    with st.expander("🤖 ML库状态", expanded=False):
-        col1, col2 = st.columns(2)
-        with col1:
-            if LGB_AVAILABLE:
-                st.markdown("✅ **LightGBM**")
-            else:
-                st.markdown("❌ **LightGBM**")
-            if XGB_AVAILABLE:
-                st.markdown("✅ **XGBoost**")
-            else:
-                st.markdown("❌ **XGBoost**")
-        with col2:
-            if SKLEARN_AVAILABLE:
-                st.markdown("✅ **scikit-learn**")
-            else:
-                st.markdown("❌ **scikit-learn**")
-        st.caption(f"MCP服务: {'✅ 可用' if MCP_AVAILABLE else '❌ 不可用'}")
-    
-    # 四种算法对比
-    # 四种算法对比
-    # 五种AI算法对比（动态回测）
-    with st.expander("📖 五种AI算法对比（动态回测）"):
-        # 回测期数滑块和刷新按钮放在同一行
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            backtest_periods = st.slider(
-                "回测期数",
-                min_value=10,
-                max_value=min(200, len(draws) - 10) if len(draws) > 10 else 30,
-                value=30,
-                step=5,
-                key="sidebar_backtest_periods"
-            )
-        with col2:
-            if st.button("🔄 刷新ROI", use_container_width=True, key="refresh_roi_btn"):
-                st.cache_data.clear()
-                st.rerun()
-        
-        # 动态计算ROI
-        if len(draws) >= backtest_periods:
-            try:
-                roi_results = {}
-                for method in ["方法1", "方法2", "方法3", "方法4"]:
-                    result = backtest_roi(draws, method, num_bets=4, lookback=backtest_periods)
-                    roi_results[method] = result['roi']
-                
-                # 计算综合模式ROI（取方法2-4的平均）
-                ensemble_roi = (roi_results.get("方法2", 0) + roi_results.get("方法3", 0) + roi_results.get("方法4", 0)) / 3
-                
-                st.markdown(f"""
-                | 算法 | 特点 | {backtest_periods}期ROI |
-                |------|------|---------|
-                | 🟢 方法1 | 冷热码+和值预测 | {roi_results.get("方法1", 0):.1f}% |
-                | 🟡 方法2 | 胆拖混合 | {roi_results.get("方法2", 0):.1f}% |
-                | 🔵 方法3 | LightGBM | {roi_results.get("方法3", 0):.1f}% |
-                | 🟣 方法4 | XGBoost+NN | {roi_results.get("方法4", 0):.1f}% |
-                | 🌟 方法5 | 综合模式（投票） | {ensemble_roi:.1f}% |
-                """)
-                
-                # 显示最佳方法
-                best_method = max(roi_results, key=roi_results.get)
-                best_roi = roi_results[best_method]
-                if ensemble_roi > best_roi:
-                    st.success(f"🏆 当前最佳：方法5 综合模式 (ROI: {ensemble_roi:.1f}%)")
-                else:
-                    st.success(f"🏆 当前最佳：{best_method} (ROI: {best_roi:.1f}%)")
-                
-                from datetime import datetime
-                st.caption(f"📅 基于最近{backtest_periods}期回测")
-            except Exception as e:
-                st.error(f"回测计算失败: {e}")
-                st.info("请确保数据量足够（至少30期）")
-        else:
-            st.warning(f"当前只有 {len(draws)} 期数据，需要至少 {backtest_periods} 期才能回测")
-            st.markdown("""
-            | 算法 | 特点 | 说明 |
-            |------|------|------|
-            | 🟢 方法1 | 冷热码+和值 | 数据不足 |
-            | 🟡 方法2 | 胆拖混合 | 数据不足 |
-            | 🔵 方法3 | LightGBM | 数据不足 |
-            | 🟣 方法4 | XGBoost+NN | 数据不足 |
-            | 🌟 方法5 | 综合模式 | 数据不足 |
-            """)
-    
-    # 奖金结构
-    with st.expander("💰 奖金结构（7+1复式）"):
-        st.markdown("""
-        | 条件 | 7+1总奖金 |
-        |------|-----------|
-        | 中蓝球 | 35元 |
-        | 中3红 | 35元 (福运奖) |
-        | 中3+1 | 70元 |
-        | 中4+0 | 70元 |
-        | 中4+1 | 200-400元 |
-        | 中5+0 | 200-300元 |
-        | 中5+1 | 3000-9000元 |
-        """)
-    
-    st.markdown("---")
-    st.caption("DFSS智能选号工具 v11.0")
 
-# ==================== 主页面内容（注意：这里不能有缩进！）====================
-
-# ==================== 显示数据概览 ====================
-st.subheader("📊 数据概览")
-latest = draws[-1]
-oldest = draws[0]
-
-col1, col2, col3, col4, col5 = st.columns(5)
-with col1:
-    st.metric("最新期号", latest.get('period', 'N/A'))
-with col2:
-    date_val = latest.get('date', '')
-    st.metric("最新日期", str(date_val)[:10] if date_val else 'N/A')
-with col3:
-    st.metric("最早期号", oldest.get('period', 'N/A'))
-with col4:
-    pool = latest.get('pool', 0)
-    st.metric("奖池金额", f"¥{pool/1e8:.1f}亿")
-with col5:
-    st.metric("数据总量", f"{len(draws)}期")
-
-st.markdown("---")
-
-print("第1部分加载完成")
-
-# 第1部分结束 - 请确认后继续第2部分
+print("第2部分加载完成")
+print("=" * 60)
+print("请确认第2部分代码，输入 CONFIRM 后继续第3部分")
+print("=" * 60)
 # ============================================================
-# 第2部分：分析引擎（冷热码、7分区、和值、蓝球、ML信号）
+# 第3部分：分析引擎（冷热码、7分区、和值、蓝球、ML信号）+ 滚动窗口回测
 # ============================================================
 
 # ==================== 冷热码分析 ====================
-# ==================== 冷热码分析（修正版） ====================
 def get_hot_cold_analysis(draws: List[Dict], analysis_periods: int = 100):
     """获取冷热码分析数据"""
     if len(draws) < analysis_periods:
@@ -1206,13 +1111,11 @@ def get_hot_cold_analysis(draws: List[Dict], analysis_periods: int = 100):
                 break
         blue_absence[num] = last_seen if last_seen is not None else len(draws)
     
-    # 计算频率（正确的公式：出现次数 / 期数 / 6 * 100）
     total_draws = len(recent_draws)
-    total_red_balls = total_draws * 6
     
-    # 热门红球 Top 15（按出现次数排序）
+    # 热门红球 Top 15
     hot_reds = sorted(red_freq.items(), key=lambda x: x[1], reverse=True)[:15]
-    # 冷门红球 Bottom 10（按出现次数排序）
+    # 冷门红球 Bottom 10
     cold_reds = sorted(red_freq.items(), key=lambda x: x[1])[:10]
     # 热门蓝球 Top 8
     hot_blues = sorted(blue_freq.items(), key=lambda x: x[1], reverse=True)[:8]
@@ -1268,7 +1171,6 @@ def get_zone_heat(draws: List[Dict], analysis_periods: int = 100):
     
     return zone_heat
 
-
 # ==================== 蓝球走势分析 ====================
 def get_blue_trend(draws: List[Dict], analysis_periods: int = 50):
     """获取蓝球走势数据"""
@@ -1307,7 +1209,6 @@ def get_blue_trend(draws: List[Dict], analysis_periods: int = 50):
         'analysis_periods': analysis_periods
     }
 
-
 # ==================== 和值趋势分析 ====================
 def get_sum_trend(draws: List[Dict], analysis_periods: int = 50):
     """获取和值走势数据"""
@@ -1332,7 +1233,6 @@ def get_sum_trend(draws: List[Dict], analysis_periods: int = 50):
         'std_sum': std_sum,
         'analysis_periods': analysis_periods
     }
-
 
 # ==================== 动态和值预测 ====================
 def get_target_sum(draws: List[Dict]) -> Tuple[int, int]:
@@ -1361,8 +1261,7 @@ def get_target_sum(draws: List[Dict]) -> Tuple[int, int]:
     
     return int(target), RED_SUM_STD
 
-
-# ==================== ML信号分析（完整版） ====================
+# ==================== ML信号分析 ====================
 def calculate_ml_signals(draws: List[Dict]) -> Dict:
     """计算ML特征信号 - 包含奖池分析、剪刀差、周期预测等"""
     if not draws or len(draws) < 10:
@@ -1483,8 +1382,7 @@ def calculate_ml_signals(draws: List[Dict]) -> Dict:
     last_reds = draws[-1].get('reds', [])
     prev_reds = draws[-2].get('reds', []) if len(draws) >= 2 else []
     repeat_count = len(set(last_reds) & set(prev_reds)) if prev_reds else 0
-    repeat_prob = 60
-    repeat_hint = f"上期红球重复{repeat_count}个，历史概率{repeat_prob}%"
+    repeat_hint = f"上期红球重复{repeat_count}个，历史概率60%"
     
     # 7. 综合信号强度（0-100）
     signal_strength = max(0, min(100, signal_strength))
@@ -1526,7 +1424,6 @@ def calculate_ml_signals(draws: List[Dict]) -> Dict:
         'sum_suggestion': sum_suggestion
     }
 
-
 # ==================== 获取下一期期号 ====================
 def get_next_period(draws: List[Dict]) -> str:
     """获取下一期期号"""
@@ -1536,7 +1433,6 @@ def get_next_period(draws: List[Dict]) -> str:
     if latest_period and str(latest_period).isdigit():
         return str(int(latest_period) + 1)
     return "未知"
-
 
 # ==================== DeepSeek AI 建议 ====================
 _last_api_call = 0
@@ -1557,25 +1453,15 @@ def get_deepseek_suggestion(draws: List[Dict], source_used: str, ml_signals: Dic
     _last_api_call = current_time
     
     if not DEEPSEEK_API_KEY or len(draws) < 10:
-        method1 = Method1HotColdSum(draws) if 'Method1HotColdSum' in dir() else None
-        if method1:
-            red_scores = method1.calculate_red_scores()
-            top_reds = sorted(red_scores.items(), key=lambda x: x[1], reverse=True)[:6]
-            top_blue = sorted(red_scores.items(), key=lambda x: x[1], reverse=True)[:1] if red_scores else [(8, 0)]
-            blue_advice = f"推荐蓝球{top_blue[0][0] if top_blue else 8}"
-        else:
-            blue_advice = "参考冷热分析"
-        
         return {
             "plan": "4组7+1复式",
             "win_rate": "30-35%",
-            "blue_advice": blue_advice,
+            "blue_advice": "参考冷热分析",
             "summary": f"基于{len(draws)}期历史数据",
             "ml_tip": ml_signals.get('suggestion_text', f"奖池{ml_signals['jackpot_level']}，{ml_signals['cycle']}")
         }
     
     try:
-        # 获取热号用于提示
         hot_cold = get_hot_cold_analysis(draws, 100)
         top_reds = [num for num, _ in hot_cold['hot_reds'][:6]]
         top_blues = [num for num, _ in hot_cold['hot_blues'][:3]]
@@ -1610,7 +1496,6 @@ def get_deepseek_suggestion(draws: List[Dict], source_used: str, ml_signals: Dic
     except Exception:
         pass
     
-    # 降级：使用ML信号
     return {
         "plan": "4组7+1复式",
         "win_rate": "30-35%",
@@ -1619,56 +1504,178 @@ def get_deepseek_suggestion(draws: List[Dict], source_used: str, ml_signals: Dic
         "ml_tip": ml_signals.get('suggestion_text', f"奖池{ml_signals['jackpot_level']}，{ml_signals['cycle']}")
     }
 
-
-# ==================== 多期查奖函数 ====================
-def parse_check_draws(text: str, max_draws: int = 50) -> List[Dict]:
-    """解析查奖数据，支持用户自定义期数（上限50）"""
-    lines = text.strip().split('\n')
-    draws = []
-    for line in lines[:max_draws]:
-        if not line.strip():
-            continue
-        parts = line.replace(',', ' ').split()
-        if len(parts) >= 9:
-            try:
-                draws.append({
-                    'period': parts[0],
-                    'reds': [int(parts[i]) for i in range(2, 8)],
-                    'blue': int(parts[8])
-                })
-            except:
-                continue
-    return draws
-
-
-def calculate_prize(bet: Dict, draw: Dict) -> str:
-    """计算单注中奖"""
-    red_matches = len(set(bet['reds']) & set(draw['reds']))
-    blue_match = (bet['blue'] == draw['blue'])
+# ==================== 修正后的ROI回测函数（滚动窗口） ====================
+def calculate_prize_for_single_bet(bet: Dict, actual: Dict) -> Tuple[int, str]:
+    """计算单注中奖金额和奖级描述"""
+    red_matches = len(set(bet['reds']) & set(actual['reds']))
+    blue_match = (bet['blue'] == actual.get('blue', 0))
     
     if red_matches == 6 and blue_match:
-        return "🏆 一等奖 (浮动)"
+        return 5000000, "🏆 一等奖"
     elif red_matches == 6:
-        return "🥈 二等奖 (浮动)"
+        return 500000, "🥈 二等奖"
     elif red_matches == 5 and blue_match:
-        return "🥉 三等奖 3000元"
+        return 3000, "🥉 三等奖"
     elif red_matches == 5 or (red_matches == 4 and blue_match):
-        return "📦 四等奖 200元"
+        return 200, "📦 四等奖"
     elif red_matches == 4 or (red_matches == 3 and blue_match):
-        return "🎫 五等奖 10元"
+        return 10, "🎫 五等奖"
     elif blue_match:
-        return "⭐ 六等奖 5元"
+        return 5, "⭐ 六等奖"
     elif red_matches == 3:
-        return "🎁 福运奖 5元 (新规)"
+        return 5, "🎁 福运奖"
     else:
-        return "❌ 未中奖"
+        return 0, "❌ 未中奖"
+
+def calculate_prize_for_bets(bets: List[Dict], actual: Dict) -> int:
+    """计算一组投注的总中奖金额"""
+    total = 0
+    for bet in bets:
+        prize, _ = calculate_prize_for_single_bet(bet, actual)
+        total += prize
+    return total
+
+def backtest_roi_rolling_window(draws: List[Dict], method_name: str, num_bets: int = 4, 
+                                 start_period: int = 100, window_size: int = 10) -> Dict:
+    """
+    修正后的ROI回测函数 - 滚动窗口模式
+    每 window_size 期重新训练一次模型，模拟真实场景
+    
+    参数:
+        draws: 历史数据列表
+        method_name: 方法名称
+        num_bets: 每期投注组数
+        start_period: 从第几期开始回测
+        window_size: 滚动窗口大小（每多少期重新训练）
+    """
+    if len(draws) < start_period + 10:
+        return {"roi": 0, "total_cost": 0, "total_prize": 0, "net": 0, "win_rate": 0, "periods": 0}
+    
+    total_cost = 0
+    total_prize = 0
+    win_count = 0
+    prize_breakdown = {"first": 0, "second": 0, "third": 0, "fourth": 0, "fifth": 0, "sixth": 0, "fuyun": 0}
+    
+    # 缓存已经训练好的模型（按训练数据的截止索引）
+    model_cache = {}
+    
+    # 用于方法3和方法4的模型存储
+    trained_models = {}
+    
+    for i in range(start_period, len(draws)):
+        # 训练数据：只使用 i 期之前的数据
+        train_data = draws[:i]
+        
+        # 测试数据：第 i 期
+        test_data = draws[i]
+        
+        # 确定使用哪个模型（找到最近训练的模型）
+        model_key = None
+        if method_name in ["方法3: LightGBM", "方法4: XGBoost+NN集成"]:
+            # 找到最近的训练窗口
+            window_start = ((i - start_period) // window_size) * window_size + start_period
+            model_key = f"{method_name}_{window_start}"
+            
+            if model_key not in trained_models:
+                # 需要重新训练
+                if method_name == "方法3: LightGBM":
+                    model = Method3LightGBM(train_data)
+                    model.train()
+                    trained_models[model_key] = model
+                else:
+                    model = Method4Ensemble(train_data)
+                    model.train()
+                    trained_models[model_key] = model
+            current_model = trained_models[model_key]
+        else:
+            # 方法1和方法2不需要训练，直接使用当前数据
+            current_model = None
+        
+        # 生成投注
+        try:
+            if method_name == "方法1: 当前方法":
+                generator = Method1HotColdSum(train_data)
+                bets = generator.generate_bets(num_bets)
+            elif method_name == "方法2: 胆拖混合":
+                generator = Method2DanTuo(train_data)
+                bets = generator.generate_bets(num_bets)
+            elif method_name == "方法3: LightGBM":
+                bets = current_model.generate_bets(num_bets)
+            elif method_name == "方法4: XGBoost+NN集成":
+                bets = current_model.generate_bets(num_bets)
+            else:
+                # 默认使用方法1
+                generator = Method1HotColdSum(train_data)
+                bets = generator.generate_bets(num_bets)
+        except Exception as e:
+            # 如果生成失败，使用随机数
+            bets = []
+            for _ in range(num_bets):
+                bets.append({
+                    'reds': sorted(np.random.choice(RED_NUMBERS, size=6, replace=False)),
+                    'blue': np.random.choice(BLUE_NUMBERS),
+                    'sum': 0,
+                    'method': method_name
+                })
+        
+        # 计算当期奖金
+        period_prize = 0
+        for bet in bets:
+            prize, level = calculate_prize_for_single_bet(bet, test_data)
+            period_prize += prize
+            
+            # 统计奖级
+            if "一等奖" in level:
+                prize_breakdown["first"] += 1
+            elif "二等奖" in level:
+                prize_breakdown["second"] += 1
+            elif "三等奖" in level:
+                prize_breakdown["third"] += 1
+            elif "四等奖" in level:
+                prize_breakdown["fourth"] += 1
+            elif "五等奖" in level:
+                prize_breakdown["fifth"] += 1
+            elif "六等奖" in level:
+                prize_breakdown["sixth"] += 1
+            elif "福运奖" in level:
+                prize_breakdown["fuyun"] += 1
+        
+        period_cost = num_bets * 14  # 7+1复式每注14元
+        total_cost += period_cost
+        total_prize += period_prize
+        
+        if period_prize > 0:
+            win_count += 1
+    
+    periods = len(draws) - start_period
+    net = total_prize - total_cost
+    roi = (net / total_cost) * 100 if total_cost > 0 else 0
+    win_rate = (win_count / periods) * 100 if periods > 0 else 0
+    
+    return {
+        "roi": roi,
+        "total_cost": total_cost,
+        "total_prize": total_prize,
+        "net": net,
+        "win_rate": win_rate,
+        "periods": periods,
+        "prize_breakdown": prize_breakdown
+    }
+
+# 为了保持向后兼容，保留原函数名但使用新逻辑
+def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookback: int = 50) -> Dict:
+    """向后兼容的ROI回测函数（使用滚动窗口）"""
+    start_period = len(draws) - lookback if len(draws) > lookback else 100
+    start_period = max(start_period, 50)
+    return backtest_roi_rolling_window(draws, method_name, num_bets, start_period, window_size=10)
 
 
-print("第2部分加载完成")
-
-# 第2部分结束 - 请确认后继续第3部分
+print("第3部分加载完成")
+print("=" * 60)
+print("请确认第3部分代码，输入 CONFIRM 后继续第4部分")
+print("=" * 60)
 # ============================================================
-# 第3部分：完整的4种AI算法实现
+# 第4部分：四种AI算法实现 + 复式扩展逻辑（7+1/7+2/8+1）
 # ============================================================
 
 # ==================== 方法1：冷热码评分 + 和值动态预测 ====================
@@ -1745,7 +1752,20 @@ class Method1HotColdSum:
     def get_target_sum(self) -> Tuple[int, int]:
         return get_target_sum(self.draws)
     
-    def generate_bets(self, num_bets: int = 4) -> List[Dict]:
+    def get_top_reds_by_score(self, n: int = 10) -> List[int]:
+        """获取得分最高的n个红球"""
+        red_scores = self.calculate_red_scores()
+        sorted_reds = sorted(red_scores.items(), key=lambda x: x[1], reverse=True)
+        return [num for num, _ in sorted_reds[:n]]
+    
+    def get_top_blues_by_score(self, n: int = 3) -> List[int]:
+        """获取得分最高的n个蓝球"""
+        blue_scores = self.calculate_blue_scores()
+        sorted_blues = sorted(blue_scores.items(), key=lambda x: x[1], reverse=True)
+        return [num for num, _ in sorted_blues[:n]]
+    
+    def generate_bets(self, num_bets: int = 4, bet_type: str = "7+1") -> List[Dict]:
+        """生成投注（支持7+1/7+2/8+1）"""
         red_scores = self.calculate_red_scores()
         blue_scores = self.calculate_blue_scores()
         
@@ -1765,29 +1785,89 @@ class Method1HotColdSum:
         
         target_sum, tolerance = self.get_target_sum()
         
+        # 解析复式类型
+        red_count = 7 if bet_type.startswith("7") else 8
+        blue_count = 2 if bet_type == "7+2" else 1
+        
+        # 获取Top红球用于扩展
+        top_reds = self.get_top_reds_by_score(12)
+        top_blues = self.get_top_blues_by_score(3)
+        
         bets = []
-        for _ in range(num_bets):
+        for bet_idx in range(num_bets):
+            # 生成核心6码
+            core_reds = None
             for attempt in range(100):
                 reds = np.random.choice(RED_NUMBERS, size=6, replace=False, p=red_weights)
                 reds = sorted(reds.tolist())
                 if abs(sum(reds) - target_sum) <= tolerance:
-                    blue = np.random.choice(BLUE_NUMBERS, p=blue_weights)
-                    bets.append({
-                        'reds': reds,
-                        'blue': int(blue),
-                        'sum': sum(reds),
-                        'method': '方法1:冷热码+和值'
-                    })
+                    core_reds = reds
                     break
-            else:
-                reds = sorted(np.random.choice(RED_NUMBERS, size=6, replace=False))
-                blue = np.random.choice(BLUE_NUMBERS)
-                bets.append({
-                    'reds': reds,
-                    'blue': int(blue),
-                    'sum': sum(reds),
-                    'method': '方法1:冷热码+和值'
-                })
+            if core_reds is None:
+                core_reds = sorted(np.random.choice(RED_NUMBERS, size=6, replace=False))
+            
+            # 扩展红球到 red_count 个
+            final_reds = list(core_reds)
+            if red_count > 6:
+                # 从Top红球中选择不在当前集合中的号码
+                candidates = [r for r in top_reds if r not in final_reds]
+                # 如果Top红球不够，从所有号码中补充
+                if len(candidates) < (red_count - 6):
+                    candidates = [r for r in RED_NUMBERS if r not in final_reds]
+                
+                needed = red_count - 6
+                # 按优先级选择：热码优先，同时考虑区间平衡
+                selected = []
+                for candidate in candidates:
+                    # 检查区间平衡
+                    zones_covered = set()
+                    for r in final_reds:
+                        for zid, zone in ZONES.items():
+                            if r in zone['numbers']:
+                                zones_covered.add(zid)
+                                break
+                    candidate_zone = None
+                    for zid, zone in ZONES.items():
+                        if candidate in zone['numbers']:
+                            candidate_zone = zid
+                            break
+                    # 优先选择未覆盖区间的号码
+                    if candidate_zone not in zones_covered and len(selected) < needed:
+                        selected.append(candidate)
+                
+                # 如果还不够，补充热码
+                for candidate in candidates:
+                    if candidate not in selected and len(selected) < needed:
+                        selected.append(candidate)
+                
+                final_reds.extend(selected[:needed])
+                final_reds = sorted(final_reds)
+            
+            # 选择蓝球
+            blues = []
+            if blue_count == 1:
+                blue = np.random.choice(BLUE_NUMBERS, p=blue_weights)
+                blues.append(int(blue))
+            else:  # 7+2
+                # 主蓝球按权重选
+                primary_blue = np.random.choice(BLUE_NUMBERS, p=blue_weights)
+                blues.append(int(primary_blue))
+                # 第2个蓝球从Top蓝球中选择（避开主蓝球）
+                secondary_candidates = [b for b in top_blues if b != primary_blue]
+                if secondary_candidates:
+                    secondary_blue = np.random.choice(secondary_candidates)
+                else:
+                    secondary_blue = np.random.choice([b for b in BLUE_NUMBERS if b != primary_blue])
+                blues.append(secondary_blue)
+            
+            bets.append({
+                'reds': final_reds,
+                'blues': blues,  # 多个蓝球
+                'blue': blues[0],  # 保持向后兼容
+                'sum': sum(final_reds),
+                'method': '方法1:冷热码+和值',
+                'bet_type': bet_type
+            })
         
         return bets
 
@@ -1831,7 +1911,14 @@ class Method2DanTuo:
         sorted_nums = sorted(red_scores.items(), key=lambda x: x[1], reverse=True)
         return [num for num, _ in sorted_nums[:num_anchors]]
     
-    def generate_bets(self, num_bets: int = 4) -> List[Dict]:
+    def get_top_reds_for_expansion(self, n: int = 12) -> List[int]:
+        """获取用于扩展的Top红球"""
+        red_scores = self.method1.calculate_red_scores()
+        sorted_reds = sorted(red_scores.items(), key=lambda x: x[1], reverse=True)
+        return [num for num, _ in sorted_reds[:n]]
+    
+    def generate_bets(self, num_bets: int = 4, bet_type: str = "7+1") -> List[Dict]:
+        """生成投注（支持复式扩展）"""
         anchors = self.select_anchors(num_anchors=2)
         red_scores = self.method1.calculate_red_scores()
         blue_scores = self.method1.calculate_blue_scores()
@@ -1856,9 +1943,18 @@ class Method2DanTuo:
         
         target_sum, tolerance = self.method1.get_target_sum()
         
+        # 解析复式类型
+        red_count = 7 if bet_type.startswith("7") else 8
+        blue_count = 2 if bet_type == "7+2" else 1
+        
+        top_reds = self.get_top_reds_for_expansion(12)
+        top_blues = self.method1.get_top_blues_by_score(3)
+        
         bets = []
-        for _ in range(num_bets):
+        for bet_idx in range(num_bets):
             needed = 6 - len(anchors)
+            core_reds = anchors.copy()
+            
             for attempt in range(100):
                 candidates = [i for i in RED_NUMBERS if i not in anchors]
                 if not candidates:
@@ -1869,15 +1965,9 @@ class Method2DanTuo:
                 else:
                     candidate_weights = np.ones(len(candidates)) / len(candidates)
                 selected = np.random.choice(candidates, size=needed, replace=False, p=candidate_weights)
-                reds = sorted(anchors + selected.tolist())
-                if abs(sum(reds) - target_sum) <= tolerance:
-                    blue = np.random.choice(BLUE_NUMBERS, p=blue_weights)
-                    bets.append({
-                        'reds': reds,
-                        'blue': int(blue),
-                        'sum': sum(reds),
-                        'method': f'方法2:胆拖混合 (胆码:{anchors})'
-                    })
+                temp_reds = sorted(anchors + selected.tolist())
+                if abs(sum(temp_reds) - target_sum) <= tolerance:
+                    core_reds = temp_reds
                     break
             else:
                 candidates = [i for i in RED_NUMBERS if i not in anchors]
@@ -1885,14 +1975,65 @@ class Method2DanTuo:
                     selected = np.random.choice(candidates, size=needed, replace=False)
                 else:
                     selected = []
-                reds = sorted(anchors + selected.tolist())
-                blue = np.random.choice(BLUE_NUMBERS)
-                bets.append({
-                    'reds': reds[:6],
-                    'blue': int(blue),
-                    'sum': sum(reds[:6]),
-                    'method': f'方法2:胆拖混合 (胆码:{anchors})'
-                })
+                core_reds = sorted(anchors + selected.tolist())[:6]
+            
+            # 扩展红球
+            final_reds = list(core_reds)
+            if red_count > 6:
+                candidates = [r for r in top_reds if r not in final_reds]
+                if len(candidates) < (red_count - 6):
+                    candidates = [r for r in RED_NUMBERS if r not in final_reds]
+                
+                needed_extras = red_count - 6
+                selected_extras = []
+                for candidate in candidates:
+                    if len(selected_extras) >= needed_extras:
+                        break
+                    # 检查区间平衡
+                    zones_covered = set()
+                    for r in final_reds:
+                        for zid, zone in ZONES.items():
+                            if r in zone['numbers']:
+                                zones_covered.add(zid)
+                                break
+                    candidate_zone = None
+                    for zid, zone in ZONES.items():
+                        if candidate in zone['numbers']:
+                            candidate_zone = zid
+                            break
+                    if candidate_zone not in zones_covered:
+                        selected_extras.append(candidate)
+                
+                for candidate in candidates:
+                    if candidate not in selected_extras and len(selected_extras) < needed_extras:
+                        selected_extras.append(candidate)
+                
+                final_reds.extend(selected_extras[:needed_extras])
+                final_reds = sorted(final_reds)
+            
+            # 选择蓝球
+            blues = []
+            if blue_count == 1:
+                blue = np.random.choice(BLUE_NUMBERS, p=blue_weights)
+                blues.append(int(blue))
+            else:
+                primary_blue = np.random.choice(BLUE_NUMBERS, p=blue_weights)
+                blues.append(int(primary_blue))
+                secondary_candidates = [b for b in top_blues if b != primary_blue]
+                if secondary_candidates:
+                    secondary_blue = np.random.choice(secondary_candidates)
+                else:
+                    secondary_blue = np.random.choice([b for b in BLUE_NUMBERS if b != primary_blue])
+                blues.append(secondary_blue)
+            
+            bets.append({
+                'reds': final_reds,
+                'blues': blues,
+                'blue': blues[0],
+                'sum': sum(final_reds),
+                'method': f'方法2:胆拖混合 (胆码:{anchors})',
+                'bet_type': bet_type
+            })
         
         return bets
 
@@ -1905,6 +2046,7 @@ class Method3LightGBM:
         self.draws = draws
         self.model = None
         self.is_trained = False
+        self.top_reds_cache = None
     
     def _extract_features(self, window_draws: List[Dict], target_num: int) -> Optional[Dict]:
         """提取特征用于LightGBM训练"""
@@ -1981,8 +2123,8 @@ class Method3LightGBM:
         except Exception:
             return False
     
-    def predict(self) -> List[int]:
-        """使用训练好的模型预测"""
+    def predict_top_reds(self, n: int = 12) -> List[int]:
+        """预测概率最高的n个红球"""
         if not self.is_trained or not self.model:
             return []
         
@@ -2000,18 +2142,23 @@ class Method3LightGBM:
                 predictions.append((num, 0.0))
         
         predictions.sort(key=lambda x: x[1], reverse=True)
-        return [num for num, _ in predictions[:6]]
+        return [num for num, _ in predictions[:n]]
     
-    def generate_bets(self, num_bets: int = 4) -> List[Dict]:
-        """生成投注"""
+    def generate_bets(self, num_bets: int = 4, bet_type: str = "7+1") -> List[Dict]:
+        """生成投注（支持复式扩展）"""
         if not self.is_trained:
             self.train()
         
         if not self.is_trained:
             method1 = Method1HotColdSum(self.draws)
-            return method1.generate_bets(num_bets)
+            return method1.generate_bets(num_bets, bet_type)
         
-        predicted_reds = self.predict()
+        # 获取Top红球
+        top_reds = self.predict_top_reds(12)
+        if len(top_reds) < 6:
+            top_reds = list(range(1, 34))
+            random.shuffle(top_reds)
+        
         blue_scores = Method1HotColdSum(self.draws).calculate_blue_scores()
         blue_weights = np.array([math.exp(blue_scores.get(i, 0)) for i in BLUE_NUMBERS])
         
@@ -2020,30 +2167,57 @@ class Method3LightGBM:
         else:
             blue_weights = np.ones(16) / 16
         
+        # 解析复式类型
+        red_count = 7 if bet_type.startswith("7") else 8
+        blue_count = 2 if bet_type == "7+2" else 1
+        
+        top_blues = Method1HotColdSum(self.draws).get_top_blues_by_score(3)
+        
         bets = []
         for _ in range(num_bets):
-            reds = predicted_reds[:]
-            if len(reds) < 6:
-                missing = [n for n in RED_NUMBERS if n not in reds]
-                extra = np.random.choice(missing, size=6-len(reds), replace=False)
-                reds.extend(extra)
+            # 从Top红球中选择核心6码
+            core_reds = top_reds[:6].copy()
+            random.shuffle(core_reds)
+            core_reds = sorted(core_reds[:6])
             
-            # 随机替换1-2个号码增加多样性
-            replace_count = np.random.randint(1, 3)
-            for _ in range(replace_count):
-                idx = np.random.randint(0, len(reds))
-                candidates = [n for n in RED_NUMBERS if n not in reds]
-                if candidates:
-                    reds[idx] = np.random.choice(candidates)
+            # 扩展红球
+            final_reds = list(core_reds)
+            if red_count > 6:
+                candidates = [r for r in top_reds if r not in final_reds]
+                if len(candidates) < (red_count - 6):
+                    candidates = [r for r in RED_NUMBERS if r not in final_reds]
+                
+                needed_extras = red_count - 6
+                # 随机选择（但优先在Top中选）
+                if len(candidates) >= needed_extras:
+                    selected_extras = np.random.choice(candidates, size=needed_extras, replace=False)
+                else:
+                    selected_extras = candidates
+                final_reds.extend(selected_extras)
+                final_reds = sorted(final_reds)
             
-            reds = sorted(reds[:6])
-            blue = np.random.choice(BLUE_NUMBERS, p=blue_weights)
+            # 选择蓝球
+            blues = []
+            if blue_count == 1:
+                blue = np.random.choice(BLUE_NUMBERS, p=blue_weights)
+                blues.append(int(blue))
+            else:
+                primary_blue = np.random.choice(BLUE_NUMBERS, p=blue_weights)
+                blues.append(int(primary_blue))
+                secondary_candidates = [b for b in top_blues if b != primary_blue]
+                if secondary_candidates:
+                    secondary_blue = np.random.choice(secondary_candidates)
+                else:
+                    secondary_blue = np.random.choice([b for b in BLUE_NUMBERS if b != primary_blue])
+                blues.append(secondary_blue)
             
             bets.append({
-                'reds': reds,
-                'blue': int(blue),
-                'sum': sum(reds),
-                'method': '方法3:LightGBM'
+                'reds': final_reds,
+                'blues': blues,
+                'blue': blues[0],
+                'sum': sum(final_reds),
+                'method': '方法3:LightGBM',
+                'bet_type': bet_type
             })
         
         return bets
@@ -2059,6 +2233,7 @@ class Method4Ensemble:
         self.nn_model = None
         self.scaler = None
         self.is_trained = False
+        self.top_reds_cache = None
     
     def _extract_features_advanced(self, window_draws: List[Dict], target_num: int) -> Optional[Dict]:
         """提取高级特征用于集成模型"""
@@ -2157,11 +2332,12 @@ class Method4Ensemble:
             
             self.is_trained = True
             return True
-        except Exception:
+        except Exception as e:
+            print(f"训练失败: {e}")
             return False
     
-    def predict(self) -> List[int]:
-        """使用集成模型预测"""
+    def predict_top_reds(self, n: int = 12) -> List[int]:
+        """使用集成模型预测Top红球"""
         if not self.is_trained:
             return []
         
@@ -2189,18 +2365,23 @@ class Method4Ensemble:
                 predictions.append((num, 0.0))
         
         predictions.sort(key=lambda x: x[1], reverse=True)
-        return [num for num, _ in predictions[:6]]
+        return [num for num, _ in predictions[:n]]
     
-    def generate_bets(self, num_bets: int = 4) -> List[Dict]:
-        """生成投注"""
+    def generate_bets(self, num_bets: int = 4, bet_type: str = "7+1") -> List[Dict]:
+        """生成投注（支持复式扩展）"""
         if not self.is_trained:
             self.train()
         
         if not self.is_trained:
             method1 = Method1HotColdSum(self.draws)
-            return method1.generate_bets(num_bets)
+            return method1.generate_bets(num_bets, bet_type)
         
-        predicted_reds = self.predict()
+        # 获取Top红球
+        top_reds = self.predict_top_reds(12)
+        if len(top_reds) < 6:
+            top_reds = list(range(1, 34))
+            random.shuffle(top_reds)
+        
         blue_scores = Method1HotColdSum(self.draws).calculate_blue_scores()
         blue_weights = np.array([math.exp(blue_scores.get(i, 0)) for i in BLUE_NUMBERS])
         
@@ -2209,22 +2390,56 @@ class Method4Ensemble:
         else:
             blue_weights = np.ones(16) / 16
         
+        # 解析复式类型
+        red_count = 7 if bet_type.startswith("7") else 8
+        blue_count = 2 if bet_type == "7+2" else 1
+        
+        top_blues = Method1HotColdSum(self.draws).get_top_blues_by_score(3)
+        
         bets = []
         for _ in range(num_bets):
-            reds = predicted_reds[:]
-            if len(reds) < 6:
-                missing = [n for n in RED_NUMBERS if n not in reds]
-                extra = np.random.choice(missing, size=6-len(reds), replace=False)
-                reds.extend(extra)
+            # 从Top红球中选择核心6码
+            core_reds = top_reds[:6].copy()
+            random.shuffle(core_reds)
+            core_reds = sorted(core_reds[:6])
             
-            reds = sorted(reds[:6])
-            blue = np.random.choice(BLUE_NUMBERS, p=blue_weights)
+            # 扩展红球
+            final_reds = list(core_reds)
+            if red_count > 6:
+                candidates = [r for r in top_reds if r not in final_reds]
+                if len(candidates) < (red_count - 6):
+                    candidates = [r for r in RED_NUMBERS if r not in final_reds]
+                
+                needed_extras = red_count - 6
+                if len(candidates) >= needed_extras:
+                    selected_extras = np.random.choice(candidates, size=needed_extras, replace=False)
+                else:
+                    selected_extras = candidates
+                final_reds.extend(selected_extras)
+                final_reds = sorted(final_reds)
+            
+            # 选择蓝球
+            blues = []
+            if blue_count == 1:
+                blue = np.random.choice(BLUE_NUMBERS, p=blue_weights)
+                blues.append(int(blue))
+            else:
+                primary_blue = np.random.choice(BLUE_NUMBERS, p=blue_weights)
+                blues.append(int(primary_blue))
+                secondary_candidates = [b for b in top_blues if b != primary_blue]
+                if secondary_candidates:
+                    secondary_blue = np.random.choice(secondary_candidates)
+                else:
+                    secondary_blue = np.random.choice([b for b in BLUE_NUMBERS if b != primary_blue])
+                blues.append(secondary_blue)
             
             bets.append({
-                'reds': reds,
-                'blue': int(blue),
-                'sum': sum(reds),
-                'method': '方法4:XGBoost+NN集成'
+                'reds': final_reds,
+                'blues': blues,
+                'blue': blues[0],
+                'sum': sum(final_reds),
+                'method': '方法4:XGBoost+NN集成',
+                'bet_type': bet_type
             })
         
         return bets
@@ -2235,38 +2450,43 @@ class BetGenerator:
     """投注生成工厂类"""
     
     @staticmethod
-    def generate(method: str, draws: List[Dict], num_bets: int = 4) -> List[Dict]:
-        if method == "方法1: 当前方法":
+    def generate(method: str, draws: List[Dict], num_bets: int = 4, bet_type: str = "7+1") -> List[Dict]:
+        """生成投注（支持复式类型）"""
+        if method == "方法1: 当前方法" or method == "方法1":
             generator = Method1HotColdSum(draws)
-        elif method == "方法2: 胆拖混合":
+        elif method == "方法2: 胆拖混合" or method == "方法2":
             generator = Method2DanTuo(draws)
-        elif method == "方法3: LightGBM":
+        elif method == "方法3: LightGBM" or method == "方法3":
             generator = Method3LightGBM(draws)
-        elif method == "方法4: XGBoost+NN集成":
+        elif method == "方法4: XGBoost+NN集成" or method == "方法4":
             generator = Method4Ensemble(draws)
         else:
             generator = Method1HotColdSum(draws)
         
-        return generator.generate_bets(num_bets)
+        return generator.generate_bets(num_bets, bet_type)
+    
     @staticmethod
-    def generate_ensemble(draws: List[Dict], num_bets: int = 4) -> List[Dict]:
-        """综合模式：运行4种方法，取高频号码"""
+    def generate_ensemble(draws: List[Dict], num_bets: int = 4, bet_type: str = "7+1") -> List[Dict]:
+        """综合模式：运行4种方法，取高频号码（支持复式扩展）"""
         from collections import Counter
-        import random
         
         all_bets = []
-        methods = ["方法1：当前方法", "方法2：胆拖混合", "方法3：LightGBM", "方法4：XGBoost+NN集成"]
+        methods = ["方法1", "方法2", "方法3", "方法4"]
         
         for method in methods:
-            method_name = method.split("：")[0]  # 注意：您用的是中文冒号
             try:
-                bets = BetGenerator.generate(method_name, draws, num_bets)
+                bets = BetGenerator.generate(method, draws, num_bets, bet_type)
                 all_bets.extend(bets)
-            except Exception:
+            except Exception as e:
+                print(f"{method} 生成失败: {e}")
                 continue
         
         if not all_bets:
-            return BetGenerator.generate("方法1", draws, num_bets)
+            return BetGenerator.generate("方法1", draws, num_bets, bet_type)
+        
+        # 解析复式类型
+        red_count = 7 if bet_type.startswith("7") else 8
+        blue_count = 2 if bet_type == "7+2" else 1
         
         # 统计所有红球号码频率
         red_counter = Counter()
@@ -2275,44 +2495,81 @@ class BetGenerator:
         for bet in all_bets:
             for red in bet['reds']:
                 red_counter[red] += 1
-            blue_counter[bet['blue']] += 1
+            for blue in bet.get('blues', [bet['blue']]):
+                blue_counter[blue] += 1
         
-        # 取频率最高的7个红球和1个蓝球
-        top_reds = [num for num, _ in red_counter.most_common(7)]
-        top_blue = blue_counter.most_common(1)[0][0] if blue_counter else 8
-        
+        # 取频率最高的 red_count 个红球
+        top_reds = [num for num, _ in red_counter.most_common(red_count)]
+        if len(top_reds) < red_count:
+            # 补充
+            missing = [n for n in RED_NUMBERS if n not in top_reds]
+            top_reds.extend(missing[:red_count - len(top_reds)])
         top_reds.sort()
         
-        # 生成4组有差异的组合
+        # 取频率最高的 blue_count 个蓝球
+        top_blues = [num for num, _ in blue_counter.most_common(blue_count)]
+        if len(top_blues) < blue_count:
+            missing = [n for n in BLUE_NUMBERS if n not in top_blues]
+            top_blues.extend(missing[:blue_count - len(top_blues)])
+        
+        # 生成有差异的组合
         bets = []
         for i in range(num_bets):
             reds = top_reds.copy()
-            # 每组替换1-2个号码增加多样性
+            blues = top_blues.copy()
+            
+            # 每组替换1-2个红球增加多样性
             replace_count = min(i + 1, 2)
             for _ in range(replace_count):
                 idx = random.randint(0, len(reds) - 1)
-                candidates = [n for n in range(1, 34) if n not in reds]
+                candidates = [n for n in RED_NUMBERS if n not in reds]
                 if candidates:
                     reds[idx] = random.choice(candidates)
             reds.sort()
             
             bets.append({
                 'reds': reds,
-                'blue': top_blue,
+                'blues': blues,
+                'blue': blues[0],
                 'sum': sum(reds),
-                'method': '方法5:综合模式'
+                'method': '方法5:综合模式',
+                'bet_type': bet_type
             })
         
         return bets
 
-print("第3部分加载完成")
 
-# 第3部分结束 - 请确认后继续第4部分
+print("第4部分加载完成")
+print("=" * 60)
+print("请确认第4部分代码，输入 CONFIRM 后继续第5部分")
+print("=" * 60)
 # ============================================================
-# 第4部分：主页面UI + 完整布局 + 投注生成界面
+# 第5部分：主页面UI整合 + 完整代码 + 投注结果显示（表格形式）
 # ============================================================
 
-# ==================== 冷热码分析显示 ====================
+# ==================== 主页面内容 ====================
+
+# ==================== 显示数据概览 ====================
+st.subheader("📊 数据概览")
+latest = draws[-1]
+oldest = draws[0]
+
+col1, col2, col3, col4, col5 = st.columns(5)
+with col1:
+    st.metric("最新期号", latest.get('period', 'N/A'))
+with col2:
+    date_val = latest.get('date', '')
+    st.metric("最新日期", str(date_val)[:10] if date_val else 'N/A')
+with col3:
+    st.metric("最早期号", oldest.get('period', 'N/A'))
+with col4:
+    pool = latest.get('pool', 0)
+    st.metric("奖池金额", f"¥{pool/1e8:.1f}亿")
+with col5:
+    st.metric("数据总量", f"{len(draws)}期")
+
+st.markdown("---")
+
 # ==================== 冷热码分析显示 ====================
 st.subheader("🔥 冷热码分析")
 
@@ -2346,7 +2603,7 @@ col1, col2, col3 = st.columns(3)
 with col1:
     st.markdown("**🔥 热门红球 Top 15**")
     hot_df = pd.DataFrame([
-        {'号码': num, '出现次数': cnt, '频率': cnt / cold_hot_data['total_draws'] / 6 * 100}
+        {'号码': num, '出现次数': cnt, '频率': cnt / (cold_hot_data['total_draws'] * 6) * 100 if cold_hot_data['total_draws'] > 0 else 0}
         for num, cnt in cold_hot_data['hot_reds']
     ])
     st.dataframe(hot_df.style.format({'频率': '{:.1f}%'}), use_container_width=True, hide_index=True)
@@ -2376,7 +2633,7 @@ with col3:
 # 蓝球热号单独显示
 st.markdown("**💙 热门蓝球 Top 8**")
 hot_blues_df = pd.DataFrame([
-    {'蓝球': num, '出现次数': cnt, '频率': cnt / cold_hot_data['total_draws'] * 100}
+    {'蓝球': num, '出现次数': cnt, '频率': cnt / cold_hot_data['total_draws'] * 100 if cold_hot_data['total_draws'] > 0 else 0}
     for num, cnt in cold_hot_data['hot_blues']
 ])
 st.dataframe(hot_blues_df.style.format({'频率': '{:.1f}%'}), use_container_width=True, hide_index=True)
@@ -2427,7 +2684,7 @@ fig_sum.update_layout(
 )
 st.plotly_chart(fig_sum, use_container_width=True)
 
-# 预测指标卡片（放在图表下方）
+# 预测指标卡片
 st.markdown("**📊 和值预测参考**")
 col1, col2, col3, col4 = st.columns(4)
 with col1:
@@ -2469,8 +2726,8 @@ with col2:
     stats_df = pd.DataFrame([
         {'指标': '小号(1-8)出现次数', '数值': blue_trend['small_count']},
         {'指标': '大号(9-16)出现次数', '数值': blue_trend['large_count']},
-        {'指标': '小号占比', '数值': f"{blue_trend['small_count']/trend_periods*100:.1f}%"},
-        {'指标': '大号占比', '数值': f"{blue_trend['large_count']/trend_periods*100:.1f}%"},
+        {'指标': '小号占比', '数值': f"{blue_trend['small_count']/trend_periods*100:.1f}%" if trend_periods > 0 else "0%"},
+        {'指标': '大号占比', '数值': f"{blue_trend['large_count']/trend_periods*100:.1f}%" if trend_periods > 0 else "0%"},
     ])
     st.dataframe(stats_df, use_container_width=True, hide_index=True)
     
@@ -2543,9 +2800,9 @@ with col2:
     bet_type = st.selectbox("复式类型", ["7+1 (14元)", "7+2 (28元)", "8+1 (56元)"], key="bet_type")
 with col3:
     ai_model = st.selectbox(
-    "AI模型",
-    ["方法5: 综合模式 ⭐推荐", "方法4: XGBoost+NN集成", "方法3: LightGBM", "方法2: 胆拖混合", "方法1: 当前方法"],
-    key="ai_model"
+        "AI模型",
+        ["方法5: 综合模式 ⭐推荐", "方法4: XGBoost+NN集成", "方法3: LightGBM", "方法2: 胆拖混合", "方法1: 当前方法"],
+        key="ai_model"
     )
 
 col1, col2 = st.columns(2)
@@ -2564,9 +2821,29 @@ with col2:
 
 use_seed = st.checkbox("使用随机种子", value=False, key="use_seed")
 
+# ML预测刷新按钮（使用缓存）
+col_refresh_ml, _ = st.columns([1, 5])
+with col_refresh_ml:
+    if st.button("🔄 刷新ML预测", use_container_width=True, help="重新训练ML模型（耗时约30秒）"):
+        with st.spinner("正在训练ML模型，请稍候..."):
+            # 清除缓存，强制重新训练
+            for method_name in ["方法3: LightGBM", "方法4: XGBoost+NN集成"]:
+                cache_key = f"ml_model_{method_name}"
+                if cache_key in st.session_state:
+                    del st.session_state[cache_key]
+            
+            # 重新生成投注（会触发重新训练）
+            temp_method = ai_model.split(":")[0] if ":" in ai_model else ai_model
+            if "综合模式" in ai_model:
+                temp_bets = BetGenerator.generate_ensemble(draws, num_bets, bet_type.split(' ')[0])
+            else:
+                temp_bets = BetGenerator.generate(temp_method, draws, num_bets, bet_type.split(' ')[0])
+            
+            st.success("ML模型刷新完成！")
+            st.rerun()
+
 if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
     if use_seed:
-        # 合并日期和时间（这里需要8个空格缩进）
         seed_datetime = datetime.combine(seed_date, seed_time)
         seed_val = int(seed_datetime.timestamp())
         random.seed(seed_val)
@@ -2577,54 +2854,63 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
         np.random.seed()
     
     with st.spinner(f"正在使用 {ai_model} 生成投注..."):
+        # 提取复式类型代码（如"7+1"）
+        bet_type_code = bet_type.split(' ')[0]  # "7+1 (14元)" -> "7+1"
         
         if "综合模式" in ai_model:
-            # 这里需要12个空格缩进（因为已经在 with 块内）
-            bets = BetGenerator.generate_ensemble(draws, num_bets)
+            bets = BetGenerator.generate_ensemble(draws, num_bets, bet_type_code)
         else:
-            # 这里也需要12个空格缩进
             method_name = ai_model.split(":")[0] if ":" in ai_model else ai_model
-            bets = BetGenerator.generate(method_name, draws, num_bets)
+            bets = BetGenerator.generate(method_name, draws, num_bets, bet_type_code)
         
         st.session_state['generated_bets'] = bets
         st.session_state['model_used'] = ai_model
+        st.session_state['bet_type'] = bet_type_code
     
-    st.success(f"✅ 使用 {ai_model} 生成 {len(bets)} 组投注")
+    st.success(f"✅ 使用 {ai_model} 生成 {len(bets)} 组 {bet_type_code} 复式投注")
 
-# 显示生成的投注
+# 显示生成的投注（表格形式，无图片卡片）
 if st.session_state.get('generated_bets'):
     bets = st.session_state['generated_bets']
     model_used = st.session_state.get('model_used', '未知')
+    bet_type_display = st.session_state.get('bet_type', '7+1')
     
     st.markdown(f"### 📝 推荐投注组合 - {model_used}")
-    st.caption(f"{bet_type}复式，每组成本{bet_type.split('(')[1] if '(' in bet_type else '14元'}")
+    st.caption(f"{bet_type_display}复式，每组成本{bet_type_display.split('+')[0]}红球 + {bet_type_display.split('+')[1]}蓝球")
     
-    # 用卡片形式显示
-    cols = st.columns(min(num_bets, 4))
-    for i, bet in enumerate(bets):
-        col_idx = i % 4
-        with cols[col_idx]:
-            red_html = " ".join([f'<span class="red-ball">{r:02d}</span>' for r in bet['reds']])
-            blue_html = f'<span class="blue-ball">{bet["blue"]:02d}</span>'
-            st.markdown(f"""
-            <div class="bet-card">
-                <strong>第{i+1}组</strong><br>
-                {red_html}<br>
-                {blue_html}<br>
-                <small>和值: {bet['sum']}</small>
-            </div>
-            """, unsafe_allow_html=True)
+    # 表格形式显示投注
+    bets_data = []
+    for i, bet in enumerate(bets, 1):
+        # 格式化红球
+        reds_str = ' '.join([f"{r:02d}" for r in bet['reds'][:7]])  # 最多显示7个
+        # 格式化蓝球
+        if 'blues' in bet and len(bet['blues']) > 1:
+            blues_str = ' '.join([f"{b:02d}" for b in bet['blues']])
+        else:
+            blues_str = f"{bet['blue']:02d}"
+        
+        bets_data.append({
+            '组别': i,
+            '红球': reds_str,
+            '蓝球': blues_str,
+            '红球数量': len(bet['reds']),
+            '蓝球数量': len(bet.get('blues', [bet['blue']])),
+            '和值': bet['sum']
+        })
     
-    with st.expander("📋 查看详细表格"):
-        bets_data = []
-        for i, bet in enumerate(bets, 1):
-            bets_data.append({
-                '组别': i,
-                '红球': ' '.join(f"{r:02d}" for r in bet['reds']),
-                '蓝球': f"{bet['blue']:02d}",
-                '和值': bet['sum']
-            })
-        st.dataframe(pd.DataFrame(bets_data), use_container_width=True, hide_index=True)
+    st.dataframe(
+        pd.DataFrame(bets_data), 
+        use_container_width=True, 
+        hide_index=True,
+        column_config={
+            '组别': st.column_config.NumberColumn('组别', width='small'),
+            '红球': st.column_config.TextColumn('红球', width='large'),
+            '蓝球': st.column_config.TextColumn('蓝球', width='medium'),
+            '红球数量': st.column_config.NumberColumn('红球数量', width='small'),
+            '蓝球数量': st.column_config.NumberColumn('蓝球数量', width='small'),
+            '和值': st.column_config.NumberColumn('和值', width='small')
+        }
+    )
     
     # AI建议
     ai_suggestion = get_deepseek_suggestion(draws, "Supabase", ml_signals, next_period)
@@ -2643,7 +2929,7 @@ with st.expander("📈 ROI回测分析"):
         backtest_bets = st.number_input("每期组数", min_value=1, max_value=10, value=4, key="backtest_bets")
     
     if st.button("运行回测", key="backtest_btn"):
-        with st.spinner("正在回测..."):
+        with st.spinner("正在回测（使用滚动窗口模式，请耐心等待）..."):
             results = []
             for method in ["方法1: 当前方法", "方法2: 胆拖混合", "方法3: LightGBM", "方法4: XGBoost+NN集成"]:
                 method_name = method.split(":")[0] if ":" in method else method
@@ -2674,7 +2960,7 @@ with st.expander("📈 ROI回测分析"):
             ])
             st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
             
-            st.caption(f"回测期间：最近{backtest_periods}期 | 每组成本14元")
+            st.caption(f"回测期间：最近{backtest_periods}期 | 使用滚动窗口模式，每10期重新训练模型")
 
 st.markdown("---")
 
@@ -2693,31 +2979,79 @@ check_draws_text = st.text_area(
     placeholder="格式: 期号 日期 红1 红2 红3 红4 红5 红6 蓝\n示例:\n2026050 2026-05-03 03 04 14 15 18 20 02\n2026049 2026-05-01 09 15 18 24 28 33 01\n\n支持最多50期"
 )
 
+def parse_check_draws(text: str, max_draws: int = 50) -> List[Dict]:
+    """解析查奖数据"""
+    lines = text.strip().split('\n')
+    draws_list = []
+    for line in lines[:max_draws]:
+        if not line.strip():
+            continue
+        parts = line.replace(',', ' ').split()
+        if len(parts) >= 9:
+            try:
+                draws_list.append({
+                    'period': parts[0],
+                    'reds': [int(parts[i]) for i in range(2, 8)],
+                    'blue': int(parts[8])
+                })
+            except:
+                continue
+    return draws_list
+
 if st.button("🔍 查奖", key="check_btn") and check_draws_text:
-    check_draws = parse_check_draws(check_draws_text, max_draws=max_check_draws)
-    if check_draws:
-        st.success(f"✅ 成功解析 {len(check_draws)} 期数据")
+    check_draws_list = parse_check_draws(check_draws_text, max_draws=max_check_draws)
+    if check_draws_list:
+        st.success(f"✅ 成功解析 {len(check_draws_list)} 期数据")
         
         if st.session_state.get('generated_bets'):
+            # 构建表格数据
             enhanced_data = []
             for i, bet in enumerate(st.session_state['generated_bets'], 1):
-                row = {'组别': i, '红球': ' '.join(f"{n:02d}" for n in bet['reds']), '蓝球': f"{bet['blue']:02d}"}
-                for draw in check_draws:
-                    result = calculate_prize(bet, draw)
-                    row[f'{draw["period"]}'] = result
+                # 格式化红球
+                reds_str = ' '.join([f"{r:02d}" for r in bet['reds']])
+                # 格式化蓝球
+                if 'blues' in bet and len(bet['blues']) > 1:
+                    blues_str = ' '.join([f"{b:02d}" for b in bet['blues']])
+                else:
+                    blues_str = f"{bet['blue']:02d}"
+                
+                row = {
+                    '组别': i, 
+                    '红球': reds_str, 
+                    '蓝球': blues_str
+                }
+                
+                total_prize = 0
+                for draw in check_draws_list:
+                    # 计算该组投注的所有蓝球中奖情况
+                    period_prize = 0
+                    blues_to_check = bet.get('blues', [bet['blue']])
+                    for blue in blues_to_check:
+                        temp_bet = {'reds': bet['reds'], 'blue': blue}
+                        prize, level = calculate_prize_for_single_bet(temp_bet, draw)
+                        period_prize += prize
+                    
+                    total_prize += period_prize
+                    if period_prize > 0:
+                        row[f'{draw["period"]}'] = f"中{period_prize}元"
+                    else:
+                        row[f'{draw["period"]}'] = "未中奖"
+                
+                row['总奖金'] = f"¥{total_prize}"
                 enhanced_data.append(row)
             
             st.dataframe(pd.DataFrame(enhanced_data), use_container_width=True, hide_index=True)
             
+            # 统计总中奖情况
             all_prizes = []
-            for bet in st.session_state['generated_bets']:
-                for draw in check_draws:
-                    prize = calculate_prize(bet, draw)
-                    if "未中奖" not in prize:
-                        all_prizes.append(prize)
+            for row in enhanced_data:
+                for key, value in row.items():
+                    if '中' in str(value) and '元' in str(value) and key not in ['组别', '红球', '蓝球', '总奖金']:
+                        all_prizes.append(value)
             
             if all_prizes:
-                st.success(f"🎉 共中奖 {len(all_prizes)} 注，详见上表")
+                total_prize_sum = sum([int(str(v).replace('中', '').replace('元', '')) for v in all_prizes if '中' in str(v)])
+                st.success(f"🎉 共中奖 {len(all_prizes)} 注，总奖金 ¥{total_prize_sum}")
             else:
                 st.info("本期未中奖，继续加油！")
         else:
@@ -2729,7 +3063,88 @@ if st.button("🔍 查奖", key="check_btn") and check_draws_text:
 st.markdown("---")
 st.caption("⚠️ 本工具仅供学术研究和娱乐参考。双色球本质随机，历史规律不代表未来结果。2026年新规下中3红有福运奖5元。请理性投注，量力而行。")
 
-print("第4部分加载完成")
+# ==================== 侧边栏内容 ====================
+with st.sidebar:
+    st.markdown("### 🎰 双色球AI分析工具 v12.0")
+    st.markdown("---")
+    
+    # ML库状态
+    with st.expander("🤖 ML库状态", expanded=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown(f"{'✅' if LGB_AVAILABLE else '❌'} **LightGBM**")
+            st.markdown(f"{'✅' if XGB_AVAILABLE else '❌'} **XGBoost**")
+        with col2:
+            st.markdown(f"{'✅' if SKLEARN_AVAILABLE else '❌'} **scikit-learn**")
+        st.caption(f"MCP服务: {'✅ 可用' if MCP_AVAILABLE else '❌ 不可用'}")
+    
+    # 五种AI算法对比
+    with st.expander("📖 五种AI算法对比（动态回测）"):
+        backtest_periods_sidebar = st.slider(
+            "回测期数",
+            min_value=10,
+            max_value=min(200, len(draws) - 10) if len(draws) > 10 else 30,
+            value=30,
+            step=5,
+            key="sidebar_backtest_periods"
+        )
+        
+        if st.button("🔄 刷新ROI", use_container_width=True, key="refresh_roi_sidebar"):
+            st.cache_data.clear()
+            st.rerun()
+        
+        if len(draws) >= backtest_periods_sidebar:
+            try:
+                roi_results = {}
+                for method in ["方法1", "方法2", "方法3", "方法4"]:
+                    result = backtest_roi(draws, method, num_bets=4, lookback=backtest_periods_sidebar)
+                    roi_results[method] = result['roi']
+                
+                ensemble_roi = (roi_results.get("方法2", 0) + roi_results.get("方法3", 0) + roi_results.get("方法4", 0)) / 3
+                
+                st.markdown(f"""
+                | 算法 | 特点 | {backtest_periods_sidebar}期ROI |
+                |------|------|---------|
+                | 🟢 方法1 | 冷热码+和值预测 | {roi_results.get("方法1", 0):.1f}% |
+                | 🟡 方法2 | 胆拖混合 | {roi_results.get("方法2", 0):.1f}% |
+                | 🔵 方法3 | LightGBM | {roi_results.get("方法3", 0):.1f}% |
+                | 🟣 方法4 | XGBoost+NN | {roi_results.get("方法4", 0):.1f}% |
+                | 🌟 方法5 | 综合模式（投票） | {ensemble_roi:.1f}% |
+                """)
+                
+                best_method = max(roi_results, key=roi_results.get)
+                best_roi = roi_results[best_method]
+                if ensemble_roi > best_roi:
+                    st.success(f"🏆 当前最佳：方法5 综合模式 (ROI: {ensemble_roi:.1f}%)")
+                else:
+                    st.success(f"🏆 当前最佳：{best_method} (ROI: {best_roi:.1f}%)")
+                
+                st.caption(f"📅 基于最近{backtest_periods_sidebar}期回测")
+            except Exception as e:
+                st.error(f"回测失败: {e}")
+        else:
+            st.warning(f"数据不足，需要至少{backtest_periods_sidebar}期")
+    
+    # 奖金结构
+    with st.expander("💰 奖金结构（7+1复式）"):
+        st.markdown("""
+        | 条件 | 7+1总奖金 |
+        |------|-----------|
+        | 中蓝球 | 35元 |
+        | 中3红 | 35元 (福运奖) |
+        | 中3+1 | 70元 |
+        | 中4+0 | 70元 |
+        | 中4+1 | 200-400元 |
+        | 中5+0 | 200-300元 |
+        | 中5+1 | 3000-9000元 |
+        """)
+    
+    st.markdown("---")
+    st.caption("DFSS智能选号工具 v12.0")
+    st.caption("更新: 2026-05-10")
+
+
+print("第5部分加载完成")
 print("=" * 60)
 print("所有代码加载完成！应用已就绪。")
 print("=" * 60)
