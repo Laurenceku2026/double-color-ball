@@ -2865,7 +2865,7 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
         
         st.session_state['generated_bets'] = bets
         st.session_state['model_used'] = ai_model
-        st.session_state['bet_type'] = bet_type_code
+        st.session_state['last_bet_type'] = bet_type_code
     
     st.success(f"✅ 使用 {ai_model} 生成 {len(bets)} 组 {bet_type_code} 复式投注")
 
@@ -2873,7 +2873,7 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
 if st.session_state.get('generated_bets'):
     bets = st.session_state['generated_bets']
     model_used = st.session_state.get('model_used', '未知')
-    bet_type_display = st.session_state.get('bet_type', '7+1')
+    bet_type_display = st.session_state.get('last_bet_type', '7+1')
     
     st.markdown(f"### 📝 推荐投注组合 - {model_used}")
     st.caption(f"{bet_type_display}复式，每组成本{bet_type_display.split('+')[0]}红球 + {bet_type_display.split('+')[1]}蓝球")
