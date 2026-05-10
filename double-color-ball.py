@@ -2329,51 +2329,52 @@ class Method4Ensemble:
         self.is_trained = False
         self.top_reds_cache = None
     
-    def _extract_features_advanced(self, window_draws: List[Dict], target_num: int) -> Optional[Dict]:
-        """提取高级特征用于集成模型"""
-        if len(window_draws) < 30:
-            return None
-        
-        features = {}
-        total = len(window_draws)
-        
-        # 基础频率
-        freq = sum(1 for d in window_draws if target_num in d.get('reds', []))
-        features['freq'] = freq / total if total > 0 else 0
-        
-        # 遗漏期数
-        last_seen = None
-        for idx, d in enumerate(reversed(window_draws)):
-            if target_num in d.get('reds', []):
-                last_seen = idx
-                break
-        features['absence'] = last_seen if last_seen is not None else total
-        features['absence_norm'] = features['absence'] / total if total > 0 else 0
-        
-        # 多窗口频率
-        for window in [3, 5, 10]:
-            recent = window_draws[-window:] if len(window_draws) >= window else window_draws
-            recent_freq = sum(1 for d in recent if target_num in d.get('reds', []))
-            features[f'recent_{window}'] = recent_freq / len(recent) if recent else 0
-        
-        # 与上期关系
-        if window_draws:
-            last_reds = window_draws[-1].get('reds', [])
-            features['last_appeared'] = 1 if target_num in last_reds else 0
-            if last_reds:
-                features['min_diff_to_last'] = min(abs(target_num - n) for n in last_reds)
-            else:
-                features['min_diff_to_last'] = 99
-        
-        # 分区和统计特征
-        zone = (target_num - 1) // 11 + 1
-        features['zone'] = zone
-        features['parity'] = target_num % 2
-        features['size'] = 0 if target_num <= 16 else 1
-        features['tail'] = target_num % 10
-        
-        return features
+def _extract_features_advanced(self, window_draws: List[Dict], target_num: int) -> Optional[Dict]:
+    """提取特征用于集成模型（简化版，与方法3保持一致）"""
+    if len(window_draws) < 30:
+        return None
     
+    features = {}
+    total = len(window_draws)
+    
+    # 基础频率
+    freq = sum(1 for d in window_draws if target_num in d.get('reds', []))
+    features['freq'] = freq / total if total > 0 else 0
+    
+    # 遗漏期数
+    last_seen = None
+    for idx, d in enumerate(reversed(window_draws)):
+        if target_num in d.get('reds', []):
+            last_seen = idx
+            break
+    features['absence'] = last_seen if last_seen is not None else total
+    # features['absence_norm'] = features['absence'] / total if total > 0 else 0  # 注释掉
+    
+    # 多窗口频率（注释掉，与方法3保持一致）
+    # for window in [3, 5, 10]:
+    #     recent = window_draws[-window:] if len(window_draws) >= window else window_draws
+    #     recent_freq = sum(1 for d in recent if target_num in d.get('reds', []))
+    #     features[f'recent_{window}'] = recent_freq / len(recent) if recent else 0
+    
+    # 近期频率（只保留10期，与方法3一致）
+    recent = window_draws[-10:] if len(window_draws) >= 10 else window_draws
+    recent_freq = sum(1 for d in recent if target_num in d.get('reds', []))
+    features['recent_freq'] = recent_freq / len(recent) if recent else 0
+    
+    # 与上期关系
+    if window_draws:
+        last_reds = window_draws[-1].get('reds', [])
+        features['last_appeared'] = 1 if target_num in last_reds else 0
+        # features['min_diff_to_last'] = min(abs(target_num - n) for n in last_reds) if last_reds else 99  # 注释掉
+    
+    # 分区和统计特征
+    zone = (target_num - 1) // 11 + 1
+    features['zone'] = zone
+    features['parity'] = target_num % 2
+    features['size'] = 0 if target_num <= 16 else 1
+    # features['tail'] = target_num % 10  # 注释掉
+    
+    return features    
     def train(self) -> bool:
         """训练XGBoost + 神经网络集成模型"""
         if (not XGB_AVAILABLE or not SKLEARN_AVAILABLE) or len(self.draws) < 150:
