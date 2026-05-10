@@ -1757,8 +1757,8 @@ def backtest_roi_rolling_window(draws: List[Dict], method_name: str, num_bets: i
 
 def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookback: int = 50) -> Dict:
     """向后兼容的ROI回测函数（使用滚动窗口）"""
-    start_period = len(draws) - lookback if len(draws) > lookback else 100
-    start_period = max(start_period, 50)
+    start_period = len(draws) - lookback if len(draws) > lookback else 200
+    start_period = max(start_period, 100)
     return backtest_roi_rolling_window(draws, method_name, num_bets, start_period, window_size=10)
 
 
@@ -2200,9 +2200,14 @@ class Method3LightGBM:
         
         try:
             self.model = lgb.LGBMClassifier(
-                n_estimators=100,
-                max_depth=5,
-                learning_rate=0.1,
+                n_estimators=50,        # 从100减少
+                max_depth=3,            # 从5减少
+                num_leaves=15,          # 新增（默认31）
+                learning_rate=0.05,     # 从0.1减少
+                subsample=0.7,          # 新增，每棵树采样70%
+                colsample_bytree=0.7,   # 新增，特征采样70%
+                reg_alpha=0.1,          # 新增L1正则
+                reg_lambda=0.1,         # 新增L2正则
                 random_state=42,
                 verbose=-1
             )
@@ -2396,9 +2401,13 @@ class Method4Ensemble:
         try:
             # XGBoost
             self.xgb_model = xgb.XGBClassifier(
-                n_estimators=100,
-                max_depth=4,
-                learning_rate=0.1,
+                n_estimators=80,
+                max_depth=3,
+                learning_rate=0.05,
+                subsample=0.7,
+                colsample_bytree=0.7,
+                reg_alpha=0.1,
+                reg_lambda=0.1,
                 random_state=42,
                 use_label_encoder=False,
                 eval_metric='logloss',
