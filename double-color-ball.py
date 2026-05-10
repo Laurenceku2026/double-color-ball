@@ -115,15 +115,11 @@ BLUE_NUMBERS = list(range(1, 17))
 RED_EXPECTED_SUM = 102
 RED_SUM_STD = 15
 
-# 7分区定义
+# 改为3区
 ZONES = {
-    1: {'name': 'A区', 'range': '01-05', 'numbers': [1, 2, 3, 4, 5]},
-    2: {'name': 'B区', 'range': '06-10', 'numbers': [6, 7, 8, 9, 10]},
-    3: {'name': 'C区', 'range': '11-15', 'numbers': [11, 12, 13, 14, 15]},
-    4: {'name': 'D区', 'range': '16-20', 'numbers': [16, 17, 18, 19, 20]},
-    5: {'name': 'E区', 'range': '21-25', 'numbers': [21, 22, 23, 24, 25]},
-    6: {'name': 'F区', 'range': '26-30', 'numbers': [26, 27, 28, 29, 30]},
-    7: {'name': 'G区', 'range': '31-33', 'numbers': [31, 32, 33]}
+    1: {'name': '小号区', 'range': '01-11', 'numbers': list(range(1, 12))},
+    2: {'name': '中号区', 'range': '12-22', 'numbers': list(range(12, 23))},
+    3: {'name': '大号区', 'range': '23-33', 'numbers': list(range(23, 34))}
 }
 
 # ==================== DeepSeek 配置 ====================
@@ -1069,7 +1065,7 @@ print("=" * 60)
 print("请确认第2部分代码，输入 CONFIRM 后继续第3部分")
 print("=" * 60)
 # ============================================================
-# 第3部分：分析引擎（冷热码、7分区、和值、蓝球、ML信号）+ 滚动窗口回测
+# 第3部分：分析引擎（冷热码、3分区、和值、蓝球、ML信号）+ 滚动窗口回测 + 动态注数
 # ============================================================
 
 # ==================== 冷热码分析 ====================
@@ -1132,15 +1128,16 @@ def get_hot_cold_analysis(draws: List[Dict], analysis_periods: int = 100):
         'total_draws': total_draws
     }
 
-# ==================== 7分区热度分析 ====================
+
+# ==================== 3分区热度分析 ====================
 def get_zone_heat(draws: List[Dict], analysis_periods: int = 100):
-    """获取7分区热度"""
+    """获取3分区热度"""
     if len(draws) < analysis_periods:
         analysis_periods = len(draws)
     
     recent_draws = draws[-analysis_periods:]
     
-    zone_hits = {i: 0 for i in range(1, 8)}
+    zone_hits = {1: 0, 2: 0, 3: 0}  # 3个区
     
     for draw in recent_draws:
         for num in draw.get('reds', []):
@@ -1152,24 +1149,36 @@ def get_zone_heat(draws: List[Dict], analysis_periods: int = 100):
     max_hits = max(zone_hits.values()) if zone_hits.values() else 1
     zone_heat = {}
     
+    # 颜色映射
+    colors = {'小号区': '#ff6b6b', '中号区': '#4facfe', '大号区': '#51cf66'}
+    
     for zone_id, hits in zone_hits.items():
         normalized = hits / max_hits
-        if normalized >= 0.7:
+        if normalized >= 0.6:
             heat_level = "🔥 热"
-        elif normalized >= 0.4:
+            heat_icon = "🔥"
+        elif normalized >= 0.3:
             heat_level = "⚡ 中"
+            heat_icon = "⚡"
         else:
             heat_level = "❄️ 冷"
+            heat_icon = "❄️"
+        
+        total_reds = len(recent_draws) * 6
+        percentage = (hits / total_reds * 100) if total_reds > 0 else 0
         
         zone_heat[zone_id] = {
             'name': ZONES[zone_id]['name'],
             'range': ZONES[zone_id]['range'],
             'hits': hits,
-            'percentage': hits / (len(recent_draws) * 6) * 100,
-            'heat_level': heat_level
+            'percentage': percentage,
+            'heat_level': heat_level,
+            'heat_icon': heat_icon,
+            'color': colors.get(ZONES[zone_id]['name'], '#cccccc')
         }
     
     return zone_heat
+
 
 # ==================== 蓝球走势分析 ====================
 def get_blue_trend(draws: List[Dict], analysis_periods: int = 50):
@@ -1209,6 +1218,7 @@ def get_blue_trend(draws: List[Dict], analysis_periods: int = 50):
         'analysis_periods': analysis_periods
     }
 
+
 # ==================== 和值趋势分析 ====================
 def get_sum_trend(draws: List[Dict], analysis_periods: int = 50):
     """获取和值走势数据"""
@@ -1233,6 +1243,7 @@ def get_sum_trend(draws: List[Dict], analysis_periods: int = 50):
         'std_sum': std_sum,
         'analysis_periods': analysis_periods
     }
+
 
 # ==================== 动态和值预测 ====================
 def get_target_sum(draws: List[Dict]) -> Tuple[int, int]:
@@ -1261,9 +1272,10 @@ def get_target_sum(draws: List[Dict]) -> Tuple[int, int]:
     
     return int(target), RED_SUM_STD
 
+
 # ==================== ML信号分析 ====================
 def calculate_ml_signals(draws: List[Dict]) -> Dict:
-    """计算ML特征信号 - 包含奖池分析、剪刀差、周期预测等"""
+    """计算ML特征信号 - 包含奖池分析、剪刀差、周期预测、动态注数等"""
     if not draws or len(draws) < 10:
         return {
             'jackpot_level': '数据不足',
@@ -1280,7 +1292,11 @@ def calculate_ml_signals(draws: List[Dict]) -> Dict:
             'repeat_hint': '',
             'repeat_count': 0,
             'sum_deviation': 0,
-            'sum_suggestion': ''
+            'sum_suggestion': '',
+            'recommended_bets': 0,
+            'action_text': '数据不足',
+            'action_color': 'gray',
+            'reason_text': ''
         }
     
     latest = draws[-1]
@@ -1405,6 +1421,65 @@ def calculate_ml_signals(draws: List[Dict]) -> Dict:
     else:
         sum_suggestion = f"和值正常（偏差{sum_deviation:+d}），保持均衡"
     
+    # ========== 10. 动态注数计算 ==========
+    # 第一步：基础注数（只依赖奖池）
+    if pool < 150000000:
+        base_bets = 0
+        base_reason = "奖池低于1.5亿"
+    elif pool < 250000000:
+        base_bets = 2
+        base_reason = "奖池1.5-2.5亿"
+    else:
+        base_bets = 4
+        base_reason = "奖池≥2.5亿"
+    
+    recommended_bets = base_bets
+    
+    # 第二步：信号修正
+    if signal_strength >= 60:
+        recommended_bets += 2
+    elif signal_strength <= 30:
+        recommended_bets -= 1
+    
+    if "HIGH_ALERT" in scissors:
+        recommended_bets += 2
+    
+    if "积累期" in cycle:
+        recommended_bets += 1
+    elif "冷却期" in cycle:
+        recommended_bets -= 1
+    
+    # 第三步：限制范围
+    recommended_bets = max(0, min(8, recommended_bets))
+    
+    # 第四步：生成建议文本
+    if recommended_bets == 0:
+        action_text = "❌ 建议本期不买"
+        action_color = "red"
+    elif recommended_bets <= 2:
+        action_text = "💤 小额试水"
+        action_color = "orange"
+    elif recommended_bets <= 4:
+        action_text = "⚖️ 正常投注"
+        action_color = "green"
+    else:
+        action_text = "🚀 积极投注"
+        action_color = "blue"
+    
+    # 第五步：详细原因
+    reasons = [base_reason]
+    if signal_strength >= 60:
+        reasons.append("信号强+2")
+    elif signal_strength <= 30:
+        reasons.append("信号弱-1")
+    if "HIGH_ALERT" in scissors:
+        reasons.append("剪刀差预警+2")
+    if "积累期" in cycle:
+        reasons.append("积累期+1")
+    elif "冷却期" in cycle:
+        reasons.append("冷却期-1")
+    reason_text = " → ".join(reasons)
+    
     return {
         'jackpot_level': jackpot_level,
         'scissors': scissors,
@@ -1421,8 +1496,13 @@ def calculate_ml_signals(draws: List[Dict]) -> Dict:
         'repeat_hint': repeat_hint,
         'repeat_count': repeat_count,
         'sum_deviation': sum_deviation,
-        'sum_suggestion': sum_suggestion
+        'sum_suggestion': sum_suggestion,
+        'recommended_bets': recommended_bets,
+        'action_text': action_text,
+        'action_color': action_color,
+        'reason_text': reason_text
     }
+
 
 # ==================== 获取下一期期号 ====================
 def get_next_period(draws: List[Dict]) -> str:
@@ -1433,6 +1513,7 @@ def get_next_period(draws: List[Dict]) -> str:
     if latest_period and str(latest_period).isdigit():
         return str(int(latest_period) + 1)
     return "未知"
+
 
 # ==================== DeepSeek AI 建议 ====================
 _last_api_call = 0
@@ -1504,6 +1585,7 @@ def get_deepseek_suggestion(draws: List[Dict], source_used: str, ml_signals: Dic
         "ml_tip": ml_signals.get('suggestion_text', f"奖池{ml_signals['jackpot_level']}，{ml_signals['cycle']}")
     }
 
+
 # ==================== 修正后的ROI回测函数（滚动窗口） ====================
 def calculate_prize_for_single_bet(bet: Dict, actual: Dict) -> Tuple[int, str]:
     """计算单注中奖金额和奖级描述"""
@@ -1540,13 +1622,6 @@ def backtest_roi_rolling_window(draws: List[Dict], method_name: str, num_bets: i
     """
     修正后的ROI回测函数 - 滚动窗口模式
     每 window_size 期重新训练一次模型，模拟真实场景
-    
-    参数:
-        draws: 历史数据列表
-        method_name: 方法名称
-        num_bets: 每期投注组数
-        start_period: 从第几期开始回测
-        window_size: 滚动窗口大小（每多少期重新训练）
     """
     if len(draws) < start_period + 10:
         return {"roi": 0, "total_cost": 0, "total_prize": 0, "net": 0, "win_rate": 0, "periods": 0}
@@ -1556,28 +1631,18 @@ def backtest_roi_rolling_window(draws: List[Dict], method_name: str, num_bets: i
     win_count = 0
     prize_breakdown = {"first": 0, "second": 0, "third": 0, "fourth": 0, "fifth": 0, "sixth": 0, "fuyun": 0}
     
-    # 缓存已经训练好的模型（按训练数据的截止索引）
-    model_cache = {}
-    
-    # 用于方法3和方法4的模型存储
     trained_models = {}
     
     for i in range(start_period, len(draws)):
-        # 训练数据：只使用 i 期之前的数据
         train_data = draws[:i]
-        
-        # 测试数据：第 i 期
         test_data = draws[i]
         
-        # 确定使用哪个模型（找到最近训练的模型）
         model_key = None
         if method_name in ["方法3: LightGBM", "方法4: XGBoost+NN集成"]:
-            # 找到最近的训练窗口
             window_start = ((i - start_period) // window_size) * window_size + start_period
             model_key = f"{method_name}_{window_start}"
             
             if model_key not in trained_models:
-                # 需要重新训练
                 if method_name == "方法3: LightGBM":
                     model = Method3LightGBM(train_data)
                     model.train()
@@ -1588,10 +1653,8 @@ def backtest_roi_rolling_window(draws: List[Dict], method_name: str, num_bets: i
                     trained_models[model_key] = model
             current_model = trained_models[model_key]
         else:
-            # 方法1和方法2不需要训练，直接使用当前数据
             current_model = None
         
-        # 生成投注
         try:
             if method_name == "方法1: 当前方法":
                 generator = Method1HotColdSum(train_data)
@@ -1604,11 +1667,9 @@ def backtest_roi_rolling_window(draws: List[Dict], method_name: str, num_bets: i
             elif method_name == "方法4: XGBoost+NN集成":
                 bets = current_model.generate_bets(num_bets)
             else:
-                # 默认使用方法1
                 generator = Method1HotColdSum(train_data)
                 bets = generator.generate_bets(num_bets)
-        except Exception as e:
-            # 如果生成失败，使用随机数
+        except Exception:
             bets = []
             for _ in range(num_bets):
                 bets.append({
@@ -1618,13 +1679,11 @@ def backtest_roi_rolling_window(draws: List[Dict], method_name: str, num_bets: i
                     'method': method_name
                 })
         
-        # 计算当期奖金
         period_prize = 0
         for bet in bets:
             prize, level = calculate_prize_for_single_bet(bet, test_data)
             period_prize += prize
             
-            # 统计奖级
             if "一等奖" in level:
                 prize_breakdown["first"] += 1
             elif "二等奖" in level:
@@ -1640,7 +1699,7 @@ def backtest_roi_rolling_window(draws: List[Dict], method_name: str, num_bets: i
             elif "福运奖" in level:
                 prize_breakdown["fuyun"] += 1
         
-        period_cost = num_bets * 14  # 7+1复式每注14元
+        period_cost = num_bets * 14
         total_cost += period_cost
         total_prize += period_prize
         
@@ -1662,7 +1721,6 @@ def backtest_roi_rolling_window(draws: List[Dict], method_name: str, num_bets: i
         "prize_breakdown": prize_breakdown
     }
 
-# 为了保持向后兼容，保留原函数名但使用新逻辑
 def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookback: int = 50) -> Dict:
     """向后兼容的ROI回测函数（使用滚动窗口）"""
     start_period = len(draws) - lookback if len(draws) > lookback else 100
@@ -1671,9 +1729,6 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
 
 
 print("第3部分加载完成")
-print("=" * 60)
-print("请确认第3部分代码，输入 CONFIRM 后继续第4部分")
-print("=" * 60)
 # ============================================================
 # 第4部分：四种AI算法实现 + 复式扩展逻辑（7+1/7+2/8+1）
 # ============================================================
@@ -2544,7 +2599,8 @@ print("=" * 60)
 print("请确认第4部分代码，输入 CONFIRM 后继续第5部分")
 print("=" * 60)
 # ============================================================
-# 第5部分：主页面UI整合 + 完整代码 + 投注结果显示（表格形式）
+# ============================================================
+# 第5部分：主页面UI整合 + 投注结果显示（表格形式）+ 动态注数推荐
 # ============================================================
 
 # ==================== 主页面内容 ====================
@@ -2585,7 +2641,7 @@ with col1:
     )
 with col2:
     zone_periods = st.slider(
-        "7分区统计期数",
+        "3分区统计期数",
         min_value=20,
         max_value=min(500, len(draws)),
         value=min(100, len(draws)),
@@ -2617,18 +2673,18 @@ with col2:
     st.dataframe(cold_df, use_container_width=True, hide_index=True)
 
 with col3:
-    st.markdown("**📊 7分区热度图**")
+    st.markdown("**📊 3分区热度图**")
     zone_df = pd.DataFrame([
         {
             '分区': zone['name'],
             '范围': zone['range'],
             '热度': zone['heat_level'],
             '出现次数': zone['hits'],
-            '占比': zone['percentage']
+            '占比': f"{zone['percentage']:.1f}%"
         }
         for zone_id, zone in zone_heat.items()
     ])
-    st.dataframe(zone_df.style.format({'占比': '{:.1f}%'}), use_container_width=True, hide_index=True)
+    st.dataframe(zone_df, use_container_width=True, hide_index=True)
 
 # 蓝球热号单独显示
 st.markdown("**💙 热门蓝球 Top 8**")
@@ -2707,7 +2763,6 @@ blue_trend = get_blue_trend(draws, trend_periods)
 col1, col2 = st.columns(2)
 
 with col1:
-    # 蓝球频率柱状图
     blue_freq_df = pd.DataFrame([
         {'蓝球': num, '出现次数': blue_trend['blue_freq'][num]}
         for num in range(1, 17)
@@ -2787,6 +2842,33 @@ elif strength >= 30:
 else:
     st.progress(strength / 100, text=f"💤 {strength}% - 建议观望")
 
+# ==================== 动态注数推荐卡片 ====================
+st.markdown("---")
+st.markdown("### 🎯 动态注数推荐")
+
+rec_bets = ml_signals.get('recommended_bets', 4)
+action_text = ml_signals.get('action_text', '⚖️ 正常投注')
+action_color = ml_signals.get('action_color', 'green')
+reason_text = ml_signals.get('reason_text', '')
+
+if rec_bets == 0:
+    st.warning(f"📊 **AI分析结果**：{action_text}")
+    st.info(f"📋 **原因**：{reason_text}")
+elif rec_bets <= 2:
+    st.info(f"📊 **AI分析结果**：{action_text}（建议 {rec_bets} 组）")
+    st.caption(f"📋 **原因**：{reason_text}")
+elif rec_bets <= 4:
+    st.success(f"📊 **AI分析结果**：{action_text}（建议 {rec_bets} 组）")
+    st.caption(f"📋 **原因**：{reason_text}")
+else:
+    st.markdown(f"""
+    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                border-radius: 10px; padding: 15px; color: white;">
+        📊 <strong>AI分析结果</strong>：{action_text}（建议 {rec_bets} 组）<br>
+        📋 <strong>原因</strong>：{reason_text}
+    </div>
+    """, unsafe_allow_html=True)
+
 st.markdown("---")
 
 # ==================== 智能投注生成 ====================
@@ -2795,7 +2877,22 @@ st.info(f"🎯 **预测下一期**: {next_period}")
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    num_bets = st.number_input("投注组数", min_value=1, max_value=20, value=4, key="num_bets")
+    default_bets = ml_signals.get('recommended_bets', 4)
+    if default_bets == 0:
+        default_bets = 1
+        st.caption("💡 AI建议本期不买，如需投注请手动调整")
+    
+    num_bets = st.number_input(
+        "投注组数", 
+        min_value=0, 
+        max_value=20, 
+        value=default_bets, 
+        key="num_bets",
+        help="AI已根据信号推荐最佳组数，您也可以手动调整"
+    )
+    
+    if num_bets == 0:
+        st.info("💤 已选择不投注")
 with col2:
     bet_type = st.selectbox("复式类型", ["7+1 (14元)", "7+2 (28元)", "8+1 (56元)"], key="bet_type")
 with col3:
@@ -2811,7 +2908,7 @@ with col1:
 with col2:
     require_repeat = st.checkbox("☑ 上期重复1-2个要求", value=True, key="require_repeat")
 
-# 随机种子 - 日期时间选择器
+# 随机种子设置
 st.markdown("**🎲 随机种子设置**")
 col1, col2 = st.columns(2)
 with col1:
@@ -2821,55 +2918,54 @@ with col2:
 
 use_seed = st.checkbox("使用随机种子", value=False, key="use_seed")
 
-# ML预测刷新按钮（使用缓存）
+# ML预测刷新按钮
 col_refresh_ml, _ = st.columns([1, 5])
 with col_refresh_ml:
     if st.button("🔄 刷新ML预测", use_container_width=True, help="重新训练ML模型（耗时约30秒）"):
         with st.spinner("正在训练ML模型，请稍候..."):
-            # 清除缓存，强制重新训练
             for method_name in ["方法3: LightGBM", "方法4: XGBoost+NN集成"]:
                 cache_key = f"ml_model_{method_name}"
                 if cache_key in st.session_state:
                     del st.session_state[cache_key]
-            
-            # 重新生成投注（会触发重新训练）
             temp_method = ai_model.split(":")[0] if ":" in ai_model else ai_model
             if "综合模式" in ai_model:
                 temp_bets = BetGenerator.generate_ensemble(draws, num_bets, bet_type.split(' ')[0])
             else:
                 temp_bets = BetGenerator.generate(temp_method, draws, num_bets, bet_type.split(' ')[0])
-            
             st.success("ML模型刷新完成！")
             st.rerun()
 
 if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
-    if use_seed:
-        seed_datetime = datetime.combine(seed_date, seed_time)
-        seed_val = int(seed_datetime.timestamp())
-        random.seed(seed_val)
-        np.random.seed(seed_val)
-        st.success(f"✅ 已设置随机种子: {seed_datetime.strftime('%Y-%m-%d %H:%M')}")
+    if num_bets == 0:
+        st.warning("💤 您选择了0组投注，未生成任何号码")
+        st.session_state['generated_bets'] = None
     else:
-        random.seed()
-        np.random.seed()
-    
-    with st.spinner(f"正在使用 {ai_model} 生成投注..."):
-        # 提取复式类型代码（如"7+1"）
-        bet_type_code = bet_type.split(' ')[0]  # "7+1 (14元)" -> "7+1"
-        
-        if "综合模式" in ai_model:
-            bets = BetGenerator.generate_ensemble(draws, num_bets, bet_type_code)
+        if use_seed:
+            seed_datetime = datetime.combine(seed_date, seed_time)
+            seed_val = int(seed_datetime.timestamp())
+            random.seed(seed_val)
+            np.random.seed(seed_val)
+            st.success(f"✅ 已设置随机种子: {seed_datetime.strftime('%Y-%m-%d %H:%M')}")
         else:
-            method_name = ai_model.split(":")[0] if ":" in ai_model else ai_model
-            bets = BetGenerator.generate(method_name, draws, num_bets, bet_type_code)
+            random.seed()
+            np.random.seed()
         
-        st.session_state['generated_bets'] = bets
-        st.session_state['model_used'] = ai_model
-        st.session_state['last_bet_type'] = bet_type_code
-    
-    st.success(f"✅ 使用 {ai_model} 生成 {len(bets)} 组 {bet_type_code} 复式投注")
+        with st.spinner(f"正在使用 {ai_model} 生成投注..."):
+            bet_type_code = bet_type.split(' ')[0]
+            
+            if "综合模式" in ai_model:
+                bets = BetGenerator.generate_ensemble(draws, num_bets, bet_type_code)
+            else:
+                method_name = ai_model.split(":")[0] if ":" in ai_model else ai_model
+                bets = BetGenerator.generate(method_name, draws, num_bets, bet_type_code)
+            
+            st.session_state['generated_bets'] = bets
+            st.session_state['model_used'] = ai_model
+            st.session_state['last_bet_type'] = bet_type_code
+        
+        st.success(f"✅ 使用 {ai_model} 生成 {len(bets)} 组 {bet_type_code} 复式投注")
 
-# 显示生成的投注（表格形式，无图片卡片）
+# 显示生成的投注（表格形式）
 if st.session_state.get('generated_bets'):
     bets = st.session_state['generated_bets']
     model_used = st.session_state.get('model_used', '未知')
@@ -2878,12 +2974,9 @@ if st.session_state.get('generated_bets'):
     st.markdown(f"### 📝 推荐投注组合 - {model_used}")
     st.caption(f"{bet_type_display}复式，每组成本{bet_type_display.split('+')[0]}红球 + {bet_type_display.split('+')[1]}蓝球")
     
-    # 表格形式显示投注
     bets_data = []
     for i, bet in enumerate(bets, 1):
-        # 格式化红球
-        reds_str = ' '.join([f"{r:02d}" for r in bet['reds'][:7]])  # 最多显示7个
-        # 格式化蓝球
+        reds_str = ' '.join([f"{r:02d}" for r in bet['reds'][:7]])
         if 'blues' in bet and len(bet['blues']) > 1:
             blues_str = ' '.join([f"{b:02d}" for b in bet['blues']])
         else:
@@ -2945,7 +3038,6 @@ with st.expander("📈 ROI回测分析"):
             
             st.dataframe(pd.DataFrame(results), use_container_width=True, hide_index=True)
             
-            # 显示奖金明细
             st.markdown("**🏆 奖金明细（方法4）**")
             method4_result = backtest_roi(draws, "方法4: XGBoost+NN集成", backtest_bets, backtest_periods)
             breakdown = method4_result.get('prize_breakdown', {})
@@ -2980,7 +3072,6 @@ check_draws_text = st.text_area(
 )
 
 def parse_check_draws(text: str, max_draws: int = 50) -> List[Dict]:
-    """解析查奖数据"""
     lines = text.strip().split('\n')
     draws_list = []
     for line in lines[:max_draws]:
@@ -3004,26 +3095,18 @@ if st.button("🔍 查奖", key="check_btn") and check_draws_text:
         st.success(f"✅ 成功解析 {len(check_draws_list)} 期数据")
         
         if st.session_state.get('generated_bets'):
-            # 构建表格数据
             enhanced_data = []
             for i, bet in enumerate(st.session_state['generated_bets'], 1):
-                # 格式化红球
                 reds_str = ' '.join([f"{r:02d}" for r in bet['reds']])
-                # 格式化蓝球
                 if 'blues' in bet and len(bet['blues']) > 1:
                     blues_str = ' '.join([f"{b:02d}" for b in bet['blues']])
                 else:
                     blues_str = f"{bet['blue']:02d}"
                 
-                row = {
-                    '组别': i, 
-                    '红球': reds_str, 
-                    '蓝球': blues_str
-                }
+                row = {'组别': i, '红球': reds_str, '蓝球': blues_str}
                 
                 total_prize = 0
                 for draw in check_draws_list:
-                    # 计算该组投注的所有蓝球中奖情况
                     period_prize = 0
                     blues_to_check = bet.get('blues', [bet['blue']])
                     for blue in blues_to_check:
@@ -3042,7 +3125,6 @@ if st.button("🔍 查奖", key="check_btn") and check_draws_text:
             
             st.dataframe(pd.DataFrame(enhanced_data), use_container_width=True, hide_index=True)
             
-            # 统计总中奖情况
             all_prizes = []
             for row in enhanced_data:
                 for key, value in row.items():
@@ -3068,7 +3150,6 @@ with st.sidebar:
     st.markdown("### 🎰 双色球AI分析工具 v12.0")
     st.markdown("---")
     
-    # ML库状态
     with st.expander("🤖 ML库状态", expanded=False):
         col1, col2 = st.columns(2)
         with col1:
@@ -3078,7 +3159,6 @@ with st.sidebar:
             st.markdown(f"{'✅' if SKLEARN_AVAILABLE else '❌'} **scikit-learn**")
         st.caption(f"MCP服务: {'✅ 可用' if MCP_AVAILABLE else '❌ 不可用'}")
     
-    # 五种AI算法对比
     with st.expander("📖 五种AI算法对比（动态回测）"):
         backtest_periods_sidebar = st.slider(
             "回测期数",
@@ -3125,7 +3205,6 @@ with st.sidebar:
         else:
             st.warning(f"数据不足，需要至少{backtest_periods_sidebar}期")
     
-    # 奖金结构
     with st.expander("💰 奖金结构（7+1复式）"):
         st.markdown("""
         | 条件 | 7+1总奖金 |
