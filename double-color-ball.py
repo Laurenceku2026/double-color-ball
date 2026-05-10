@@ -1400,15 +1400,38 @@ def calculate_ml_signals(draws: List[Dict]) -> Dict:
     repeat_count = len(set(last_reds) & set(prev_reds)) if prev_reds else 0
     repeat_hint = f"上期红球重复{repeat_count}个，历史概率60%"
     
-    # 7. 综合信号强度（0-100）
+        # 7. 综合信号强度（0-100）
     signal_strength = max(0, min(100, signal_strength))
     
+    # ========== 统一建议逻辑 ==========
+    # 根据信号强度统一判断
     if signal_strength >= 60:
-        suggestion_text = "🔔 强烈推荐投注"
-    elif signal_strength >= 30:
-        suggestion_text = "⚠️ 谨慎投注"
+        main_suggestion = "🔔 强烈推荐投注"
+        action_text = "🚀 积极投注"
+        action_color = "blue"
+        signal_level = "strong"
+        max_bets_by_signal = 8
+    elif signal_strength >= 40:
+        main_suggestion = "⚠️ 谨慎投注"
+        action_text = "⚖️ 正常投注"
+        action_color = "green"
+        signal_level = "medium"
+        max_bets_by_signal = 5
+    elif signal_strength >= 20:
+        main_suggestion = "💤 建议观望"
+        action_text = "💤 小额试水"
+        action_color = "orange"
+        signal_level = "weak"
+        max_bets_by_signal = 2
     else:
-        suggestion_text = "💤 建议观望"
+        main_suggestion = "❌ 不建议投注"
+        action_text = "❌ 建议本期不买"
+        action_color = "red"
+        signal_level = "none"
+        max_bets_by_signal = 0
+    
+    # 注意：第5部分显示时需要将 main_suggestion 赋值给 suggestion_text
+    suggestion_text = main_suggestion
     
     # 8-9. 和值回归提示
     current_sum = sum(last_reds)
@@ -1433,33 +1456,44 @@ def calculate_ml_signals(draws: List[Dict]) -> Dict:
         base_bets = 4
         base_reason = "奖池≥2.5亿"
     
-    recommended_bets = base_bets
+    calculated_bets = base_bets
     
     # 第二步：信号修正
-    if signal_strength >= 60:
-        recommended_bets += 2
-    elif signal_strength <= 30:
-        recommended_bets -= 1
-    
     if "HIGH_ALERT" in scissors:
-        recommended_bets += 2
+        calculated_bets += 2
+        scissors_hint = "剪刀差预警+2"
+    else:
+        scissors_hint = ""
     
     if "积累期" in cycle:
-        recommended_bets += 1
+        calculated_bets += 1
+        cycle_hint = "积累期+1"
     elif "冷却期" in cycle:
-        recommended_bets -= 1
+        calculated_bets -= 1
+        cycle_hint = "冷却期-1"
+    else:
+        cycle_hint = ""
     
-    # 第三步：限制范围
-    recommended_bets = max(0, min(8, recommended_bets))
+    # 第三步：限制范围（同时受信号强度上限约束）
+    recommended_bets = max(0, min(calculated_bets, max_bets_by_signal))
     
-    # 第四步：生成建议文本
+    # 第四步：生成详细原因
+    reasons = [base_reason]
+    if scissors_hint:
+        reasons.append(scissors_hint)
+    if cycle_hint:
+        reasons.append(cycle_hint)
+    reasons.append(f"信号{signal_strength}分{max_bets_by_signal}组上限")
+    reason_text = " → ".join(reasons)
+    
+    # 根据最终推荐组数修正 action_text
     if recommended_bets == 0:
         action_text = "❌ 建议本期不买"
         action_color = "red"
     elif recommended_bets <= 2:
         action_text = "💤 小额试水"
         action_color = "orange"
-    elif recommended_bets <= 4:
+    elif recommended_bets <= 5:
         action_text = "⚖️ 正常投注"
         action_color = "green"
     else:
