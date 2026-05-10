@@ -1656,6 +1656,7 @@ def backtest_roi_rolling_window(draws: List[Dict], method_name: str, num_bets: i
     """
     修正后的ROI回测函数 - 滚动窗口模式
     每 window_size 期重新训练一次模型，模拟真实场景
+    每期使用该期开奖日期 + 21:15 作为随机种子
     """
     if len(draws) < start_period + 10:
         return {"roi": 0, "total_cost": 0, "total_prize": 0, "net": 0, "win_rate": 0, "periods": 0}
@@ -1670,6 +1671,33 @@ def backtest_roi_rolling_window(draws: List[Dict], method_name: str, num_bets: i
     for i in range(start_period, len(draws)):
         train_data = draws[:i]
         test_data = draws[i]
+        
+        # ========== 每期使用该期开奖日期 + 21:15 作为随机种子 ==========
+        test_date = test_data.get('date')
+        if test_date:
+            try:
+                # 解析日期
+                if isinstance(test_date, str):
+                    date_obj = datetime.strptime(test_date[:10], '%Y-%m-%d')
+                elif isinstance(test_date, datetime):
+                    date_obj = test_date
+                else:
+                    date_obj = datetime.now()
+                # 使用该期日期 + 21:15 作为种子
+                seed_datetime = datetime(date_obj.year, date_obj.month, date_obj.day, 21, 15)
+                seed_val = int(seed_datetime.timestamp())
+                random.seed(seed_val)
+                np.random.seed(seed_val)
+            except Exception as e:
+                # 如果日期解析失败，使用默认种子
+                print(f"种子设置失败: {e}, 使用默认种子42")
+                random.seed(42)
+                np.random.seed(42)
+        else:
+            # 没有日期信息，使用默认种子
+            random.seed(42)
+            np.random.seed(42)
+        # ================================================================
         
         model_key = None
         if method_name in ["方法3: LightGBM", "方法4: XGBoost+NN集成"]:
