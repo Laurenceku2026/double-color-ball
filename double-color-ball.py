@@ -2319,88 +2319,82 @@ class Method3LightGBM:
 
 # ==================== 方法4：XGBoost + 神经网络集成 ====================
 class Method4Ensemble:
-    """方法4：XGBoost + 神经网络集成"""
+    """方法4：XGBoost（简化版，与方法3对齐）- 2026-05-10 修改"""
     
     def __init__(self, draws: List[Dict]):
         self.draws = draws
         self.xgb_model = None
-        self.nn_model = None
-        self.scaler = None
         self.is_trained = False
-        self.top_reds_cache = None
     
-def _extract_features_advanced(self, window_draws: List[Dict], target_num: int) -> Optional[Dict]:
-    """提取特征用于集成模型（简化版，与方法3保持一致）"""
-    if len(window_draws) < 30:
-        return None
+    def _extract_features(self, window_draws: List[Dict], target_num: int) -> Optional[Dict]:
+        """提取特征（与方法3完全一致）- 2026-05-10 简化"""
+        if len(window_draws) < 20:
+            return None
+        
+        features = {}
+        total = len(window_draws)
+        
+        # 历史频率
+        freq = sum(1 for d in window_draws if target_num in d.get('reds', []))
+        features['freq'] = freq / total if total > 0 else 0
+        
+        # 遗漏期数
+        last_seen = None
+        for idx, d in enumerate(reversed(window_draws)):
+            if target_num in d.get('reds', []):
+                last_seen = idx
+                break
+        features['absence'] = last_seen if last_seen is not None else total
+        
+        # 近期频率（最近10期）
+        recent = window_draws[-10:] if len(window_draws) >= 10 else window_draws
+        recent_freq = sum(1 for d in recent if target_num in d.get('reds', []))
+        features['recent_freq'] = recent_freq / len(recent) if recent else 0
+        
+        # 上期是否出现
+        if window_draws:
+            features['last_appeared'] = 1 if target_num in window_draws[-1].get('reds', []) else 0
+        
+        # 分区信息（3区）
+        zone = (target_num - 1) // 11 + 1
+        features['zone'] = zone
+        features['parity'] = target_num % 2
+        features['size'] = 0 if target_num <= 16 else 1
+        
+        return features
     
-    features = {}
-    total = len(window_draws)
-    
-    # 基础频率
-    freq = sum(1 for d in window_draws if target_num in d.get('reds', []))
-    features['freq'] = freq / total if total > 0 else 0
-    
-    # 遗漏期数
-    last_seen = None
-    for idx, d in enumerate(reversed(window_draws)):
-        if target_num in d.get('reds', []):
-            last_seen = idx
-            break
-    features['absence'] = last_seen if last_seen is not None else total
-    # features['absence_norm'] = features['absence'] / total if total > 0 else 0  # 注释掉
-    
-    # 多窗口频率（注释掉，与方法3保持一致）
-    # for window in [3, 5, 10]:
-    #     recent = window_draws[-window:] if len(window_draws) >= window else window_draws
-    #     recent_freq = sum(1 for d in recent if target_num in d.get('reds', []))
-    #     features[f'recent_{window}'] = recent_freq / len(recent) if recent else 0
-    
-    # 近期频率（只保留10期，与方法3一致）
-    recent = window_draws[-10:] if len(window_draws) >= 10 else window_draws
-    recent_freq = sum(1 for d in recent if target_num in d.get('reds', []))
-    features['recent_freq'] = recent_freq / len(recent) if recent else 0
-    
-    # 与上期关系
-    if window_draws:
-        last_reds = window_draws[-1].get('reds', [])
-        features['last_appeared'] = 1 if target_num in last_reds else 0
-        # features['min_diff_to_last'] = min(abs(target_num - n) for n in last_reds) if last_reds else 99  # 注释掉
-    
-    # 分区和统计特征
-    zone = (target_num - 1) // 11 + 1
-    features['zone'] = zone
-    features['parity'] = target_num % 2
-    features['size'] = 0 if target_num <= 16 else 1
-    # features['tail'] = target_num % 10  # 注释掉
-    
-    return features    
     def train(self) -> bool:
-        """训练XGBoost + 神经网络集成模型"""
-        if (not XGB_AVAILABLE or not SKLEARN_AVAILABLE) or len(self.draws) < 150:
+        """训练XGBoost模型 - 2026-05-10 移除神经网络，增加安全检查"""
+        if not XGB_AVAILABLE or len(self.draws) < 100:
+            print(f"方法4训练跳过: XGB不可用或数据不足({len(self.draws)}期)")
             return False
-        
-        X_list = []
-        y_list = []
-        
-        for i in range(80, len(self.draws) - 1):
-            window = self.draws[i-80:i]
-            next_draw = self.draws[i]
-            
-            for num in RED_NUMBERS:
-                features = self._extract_features_advanced(window, num)
-                if features:
-                    X_list.append(features)
-                    y_list.append(1 if num in next_draw.get('reds', []) else 0)
-        
-        if not X_list or len(X_list) < 1000:
-            return False
-        
-        X_df = pd.DataFrame(X_list).fillna(0)
-        y_series = pd.Series(y_list)
         
         try:
-            # XGBoost
+            X_list = []
+            y_list = []
+            
+            # 使用固定窗口大小，避免早期数据不足
+            start_idx = max(100, len(self.draws) // 4)
+            print(f"方法4训练: 使用期数范围 {start_idx} 到 {len(self.draws)-1}")
+            
+            for i in range(start_idx, len(self.draws) - 1):
+                window = self.draws[i-100:i]
+                next_draw = self.draws[i]
+                
+                for num in RED_NUMBERS:
+                    features = self._extract_features(window, num)
+                    if features:
+                        X_list.append(features)
+                        y_list.append(1 if num in next_draw.get('reds', []) else 0)
+            
+            if len(X_list) < 500:
+                print(f"方法4训练跳过: 特征数据不足({len(X_list)}条)")
+                return False
+            
+            X_df = pd.DataFrame(X_list).fillna(0)
+            y_series = pd.Series(y_list)
+            
+            # XGBoost 保守参数
             self.xgb_model = xgb.XGBClassifier(
                 n_estimators=80,
                 max_depth=3,
@@ -2416,50 +2410,39 @@ def _extract_features_advanced(self, window_draws: List[Dict], target_num: int) 
             )
             self.xgb_model.fit(X_df, y_series)
             
-            # 神经网络
-            self.scaler = StandardScaler()
-            X_scaled = self.scaler.fit_transform(X_df)
-            self.nn_model = MLPClassifier(
-                hidden_layer_sizes=(16, 8),      # 从 (32,16) 减少到 (16,8)
-                activation='tanh',                # 从 relu 改为 tanh（更平滑）
-                max_iter=50,                      # 从 100 减少
-                random_state=42,
-                early_stopping=True,
-                validation_fraction=0.1
-            )
-            self.nn_model.fit(X_scaled, y_series)
-            
             self.is_trained = True
+            print("方法4训练成功")
             return True
+            
         except Exception as e:
-            print(f"训练失败: {e}")
+            print(f"方法4训练失败: {e}")
+            self.is_trained = False
+            self.xgb_model = None
             return False
     
     def predict_top_reds(self, n: int = 12) -> List[int]:
-        """使用集成模型预测Top红球"""
-        if not self.is_trained:
-            return []
+        """预测Top红球 - 2026-05-10 移除神经网络，失败时回退到冷热法"""
+        if not self.is_trained or self.xgb_model is None:
+            # 回退到冷热法
+            print("方法4预测: 模型未训练，回退到冷热法")
+            method1 = Method1HotColdSum(self.draws)
+            return method1.get_top_reds_by_score(n)
         
         predictions = []
         for num in RED_NUMBERS:
-            features = self._extract_features_advanced(self.draws, num)
+            features = self._extract_features(self.draws, num)
             if features:
                 X_pred = pd.DataFrame([features]).fillna(0)
-                X_pred = X_pred.reindex(columns=self.xgb_model.feature_names_in_, fill_value=0)
+                # 确保列匹配
+                if hasattr(self.xgb_model, 'feature_names_in_'):
+                    X_pred = X_pred.reindex(columns=self.xgb_model.feature_names_in_, fill_value=0)
                 
                 try:
-                    xgb_prob = self.xgb_model.predict_proba(X_pred)[0][1]
-                except:
-                    xgb_prob = 0.5
-                
-                try:
-                    X_scaled = self.scaler.transform(X_pred)
-                    nn_prob = self.nn_model.predict_proba(X_scaled)[0][1]
-                except:
-                    nn_prob = 0.5
-                
-                ensemble_prob = 0.5 * xgb_prob + 0.5 * nn_prob
-                predictions.append((num, ensemble_prob))
+                    prob = self.xgb_model.predict_proba(X_pred)[0][1]
+                except Exception as e:
+                    print(f"预测号码 {num} 失败: {e}")
+                    prob = 0.5
+                predictions.append((num, prob))
             else:
                 predictions.append((num, 0.0))
         
@@ -2467,11 +2450,14 @@ def _extract_features_advanced(self, window_draws: List[Dict], target_num: int) 
         return [num for num, _ in predictions[:n]]
     
     def generate_bets(self, num_bets: int = 4, bet_type: str = "7+1") -> List[Dict]:
-        """生成投注（支持复式扩展）"""
+        """生成投注（支持复式扩展）- 2026-05-10 增加回退机制"""
         if not self.is_trained:
+            print("方法4: 开始训练...")
             self.train()
         
-        if not self.is_trained:
+        # 训练失败时回退到方法1
+        if not self.is_trained or self.xgb_model is None:
+            print("方法4: 训练失败，回退到方法1")
             method1 = Method1HotColdSum(self.draws)
             return method1.generate_bets(num_bets, bet_type)
         
@@ -2481,6 +2467,7 @@ def _extract_features_advanced(self, window_draws: List[Dict], target_num: int) 
             top_reds = list(range(1, 34))
             random.shuffle(top_reds)
         
+        # 蓝球权重（使用方法1的蓝球分数）
         blue_scores = Method1HotColdSum(self.draws).calculate_blue_scores()
         blue_weights = np.array([math.exp(blue_scores.get(i, 0)) for i in BLUE_NUMBERS])
         
@@ -2537,7 +2524,7 @@ def _extract_features_advanced(self, window_draws: List[Dict], target_num: int) 
                 'blues': blues,
                 'blue': blues[0],
                 'sum': sum(final_reds),
-                'method': '方法4:XGBoost+NN集成',
+                'method': '方法4:XGBoost（简化版）',
                 'bet_type': bet_type
             })
         
@@ -2963,22 +2950,16 @@ with col2:
 use_seed = st.checkbox("使用随机种子", value=False, key="use_seed")
 
 # ML预测刷新按钮
+# ML预测刷新按钮（安全版 - 2026-05-10 修改）
 col_refresh_ml, _ = st.columns([1, 5])
 with col_refresh_ml:
-    if st.button("🔄 刷新ML预测", use_container_width=True, help="重新训练ML模型（耗时约30秒）"):
-        with st.spinner("正在训练ML模型，请稍候..."):
-            for method_name in ["方法3: LightGBM", "方法4: XGBoost+NN集成"]:
-                cache_key = f"ml_model_{method_name}"
-                if cache_key in st.session_state:
-                    del st.session_state[cache_key]
-            temp_method = ai_model.split(":")[0] if ":" in ai_model else ai_model
-            if "综合模式" in ai_model:
-                temp_bets = BetGenerator.generate_ensemble(draws, num_bets, bet_type.split(' ')[0])
-            else:
-                temp_bets = BetGenerator.generate(temp_method, draws, num_bets, bet_type.split(' ')[0])
-            st.success("ML模型刷新完成！")
-            st.rerun()
-
+    if st.button("🔄 刷新ML预测", use_container_width=True, help="清除ML缓存，下次生成投注时重新训练"):
+        # 只清除缓存，不训练，避免错误
+        for cache_key in ['ml_model_method3', 'ml_model_method4']:
+            if cache_key in st.session_state:
+                del st.session_state[cache_key]
+        st.success("ML缓存已清除！下次生成投注时会重新训练。")
+        st.rerun()
 if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
     if num_bets == 0:
         st.warning("💤 您选择了0组投注，未生成任何号码")
