@@ -1668,6 +1668,10 @@ def backtest_roi_rolling_window(draws: List[Dict], method_name: str, num_bets: i
     
     trained_models = {}
     
+    # 保存原始随机状态，以便在回测结束后恢复
+    original_random_state = random.getstate()
+    original_np_state = np.random.get_state()
+    
     for i in range(start_period, len(draws)):
         train_data = draws[:i]
         test_data = draws[i]
@@ -1676,25 +1680,21 @@ def backtest_roi_rolling_window(draws: List[Dict], method_name: str, num_bets: i
         test_date = test_data.get('date')
         if test_date:
             try:
-                # 解析日期
                 if isinstance(test_date, str):
                     date_obj = datetime.strptime(test_date[:10], '%Y-%m-%d')
                 elif isinstance(test_date, datetime):
                     date_obj = test_date
                 else:
                     date_obj = datetime.now()
-                # 使用该期日期 + 21:15 作为种子
                 seed_datetime = datetime(date_obj.year, date_obj.month, date_obj.day, 21, 15)
                 seed_val = int(seed_datetime.timestamp())
                 random.seed(seed_val)
                 np.random.seed(seed_val)
             except Exception as e:
-                # 如果日期解析失败，使用默认种子
                 print(f"种子设置失败: {e}, 使用默认种子42")
                 random.seed(42)
                 np.random.seed(42)
         else:
-            # 没有日期信息，使用默认种子
             random.seed(42)
             np.random.seed(42)
         # ================================================================
@@ -1720,18 +1720,19 @@ def backtest_roi_rolling_window(draws: List[Dict], method_name: str, num_bets: i
         try:
             if method_name == "方法1: 当前方法":
                 generator = Method1HotColdSum(train_data)
-                bets = generator.generate_bets(num_bets)
+                bets = generator.generate_bets(num_bets, "7+1")  # 修复：添加 bet_type
             elif method_name == "方法2: 胆拖混合":
                 generator = Method2DanTuo(train_data)
-                bets = generator.generate_bets(num_bets)
+                bets = generator.generate_bets(num_bets, "7+1")  # 修复：添加 bet_type
             elif method_name == "方法3: LightGBM":
-                bets = current_model.generate_bets(num_bets)
+                bets = current_model.generate_bets(num_bets, "7+1")  # 修复：添加 bet_type
             elif method_name == "方法4: XGBoost+NN集成":
-                bets = current_model.generate_bets(num_bets)
+                bets = current_model.generate_bets(num_bets, "7+1")  # 修复：添加 bet_type
             else:
                 generator = Method1HotColdSum(train_data)
-                bets = generator.generate_bets(num_bets)
-        except Exception:
+                bets = generator.generate_bets(num_bets, "7+1")  # 修复：添加 bet_type
+        except Exception as e:
+            print(f"投注生成失败: {e}")
             bets = []
             for _ in range(num_bets):
                 bets.append({
@@ -1768,6 +1769,10 @@ def backtest_roi_rolling_window(draws: List[Dict], method_name: str, num_bets: i
         if period_prize > 0:
             win_count += 1
     
+    # 恢复原始随机状态
+    random.setstate(original_random_state)
+    np.random.set_state(original_np_state)
+    
     periods = len(draws) - start_period
     net = total_prize - total_cost
     roi = (net / total_cost) * 100 if total_cost > 0 else 0
@@ -1782,13 +1787,6 @@ def backtest_roi_rolling_window(draws: List[Dict], method_name: str, num_bets: i
         "periods": periods,
         "prize_breakdown": prize_breakdown
     }
-
-def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookback: int = 50) -> Dict:
-    """向后兼容的ROI回测函数（使用滚动窗口）"""
-    start_period = len(draws) - lookback if len(draws) > lookback else 200
-    start_period = max(start_period, 100)
-    return backtest_roi_rolling_window(draws, method_name, num_bets, start_period, window_size=10)
-
 
 print("第3部分加载完成")
 # ============================================================
