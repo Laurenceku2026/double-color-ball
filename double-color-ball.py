@@ -1654,23 +1654,33 @@ def calculate_prize_for_bets(bets: List[Dict], actual: Dict) -> int:
 def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookback: int = 50) -> Dict:
     """
     ROI回测函数 - 滚动窗口模式
-    每期使用该期开奖日期 + 21:15 作为随机种子
-    每个方法使用不同的偏移量，避免相互影响
-    """
-    # 计算起始期数
-    start_period = len(draws) - lookback if len(draws) > lookback else 100
-    start_period = max(start_period, 50)
-    window_size = 10
+    每个方法使用不同的训练窗口大小：
+    - 方法1（冷热法）: 最近50期
+    - 方法2（胆拖）: 最近100期
+    - 方法3（LightGBM）: 最近300期
+    - 方法4（XGBoost+NN）: 最近500期
     
-    if len(draws) < start_period + 10:
+    每期使用该期开奖日期 + 21:15 + 方法偏移 作为随机种子
+    """
+    # 根据方法名确定训练窗口大小
+    window_sizes = {
+        "方法1: 当前方法": 50,
+        "方法2: 胆拖混合": 100,
+        "方法3: LightGBM": 300,
+        "方法4: XGBoost+NN集成": 500
+    }
+    
+    window_size = window_sizes.get(method_name, 100)
+    
+    # 计算起始回测期数（需要至少 window_size 期数据才能开始）
+    start_period = window_size + 10
+    if len(draws) < start_period:
         return {"roi": 0, "total_cost": 0, "total_prize": 0, "net": 0, "win_rate": 0, "periods": 0}
     
     total_cost = 0
     total_prize = 0
     win_count = 0
     prize_breakdown = {"first": 0, "second": 0, "third": 0, "fourth": 0, "fifth": 0, "sixth": 0, "fuyun": 0}
-    
-    trained_models = {}
     
     # 为每个方法设置不同的基础种子偏移，避免方法间相互影响
     method_seed_offset = {
@@ -1680,8 +1690,13 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
         "方法4: XGBoost+NN集成": 400
     }.get(method_name, 0)
     
+    # 缓存训练好的模型（只对ML方法有效）
+    trained_models = {}
+    model_train_window = 10  # 每10期重新训练一次
+    
     for i in range(start_period, len(draws)):
-        train_data = draws[:i]
+        # ========== 使用滚动窗口：取最近 window_size 期作为训练数据 ==========
+        train_data = draws[i - window_size : i]
         test_data = draws[i]
         
         # ========== 每期使用该期开奖日期 + 21:15 + 方法偏移作为随机种子 ==========
@@ -1694,7 +1709,6 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
                     date_obj = test_date
                 else:
                     date_obj = datetime.now()
-                # 使用该期日期 + 21:15 + 方法偏移作为种子
                 seed_datetime = datetime(date_obj.year, date_obj.month, date_obj.day, 21, 15)
                 base_seed = int(seed_datetime.timestamp())
                 seed_val = base_seed + method_seed_offset
@@ -1705,15 +1719,18 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
                 random.seed(42 + method_seed_offset)
                 np.random.seed(42 + method_seed_offset)
         else:
-            # 没有日期信息，使用默认种子（加偏移）
             random.seed(42 + method_seed_offset)
             np.random.seed(42 + method_seed_offset)
         # ================================================================
         
+        # 对于ML方法，每 model_train_window 期重新训练一次
         model_key = None
+        current_model = None
+        
         if method_name in ["方法3: LightGBM", "方法4: XGBoost+NN集成"]:
-            window_start = ((i - start_period) // window_size) * window_size + start_period
-            model_key = f"{method_name}_{window_start}"
+            # 计算当前训练窗口的起始索引（用于模型缓存）
+            window_start = ((i - start_period) // model_train_window) * model_train_window + start_period
+            model_key = f"{method_name}_{window_start}_{window_size}"
             
             if model_key not in trained_models:
                 if method_name == "方法3: LightGBM":
@@ -1725,9 +1742,8 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
                     model.train()
                     trained_models[model_key] = model
             current_model = trained_models[model_key]
-        else:
-            current_model = None
         
+        # 生成投注
         try:
             if method_name == "方法1: 当前方法":
                 generator = Method1HotColdSum(train_data)
@@ -1744,6 +1760,7 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
                 bets = generator.generate_bets(num_bets, "7+1")
         except Exception as e:
             print(f"投注生成失败 {method_name}: {e}")
+            # 回退到随机投注
             bets = []
             for _ in range(num_bets):
                 bets.append({
@@ -1753,6 +1770,7 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
                     'method': method_name
                 })
         
+        # 计算当期奖金
         period_prize = 0
         for bet in bets:
             prize, level = calculate_prize_for_single_bet(bet, test_data)
