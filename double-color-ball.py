@@ -2664,11 +2664,9 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
         "periods": periods,
         "prize_breakdown": prize_breakdown
     }
-print("第4部分加载完成")
-print("=" * 60)
+
 print("请确认第4部分代码，输入 CONFIRM 后继续第5部分")
-print("=" * 60)
-# ============================================================
+
 # ============================================================
 # 第5部分：主页面UI整合 + 投注结果显示（表格形式）+ 动态注数推荐
 # ============================================================
@@ -3084,9 +3082,9 @@ with st.expander("📈 ROI回测分析"):
     with col1:
         backtest_periods = st.slider(
             "回测期数",
-            min_value=1,                                    # 最小1期
+            min_value=1,
             max_value=min(200, len(draws) - 10),
-            value=min(10, len(draws) - 10),                 # 默认10期
+            value=min(10, len(draws) - 10),
             key="backtest_periods"
         )
     with col2:
@@ -3101,7 +3099,6 @@ with st.expander("📈 ROI回测分析"):
     if st.button("运行回测", key="backtest_btn"):
         with st.spinner("正在回测（使用滚动窗口模式，请耐心等待）..."):
             results_data = []
-            # 先只测试方法1和2
             for method in ["方法1: 当前方法", "方法2: 胆拖混合"]:
                 method_name = method.split(":")[0] if ":" in method else method
                 result = backtest_roi(draws, method_name, backtest_bets, backtest_periods)
@@ -3129,19 +3126,36 @@ with st.expander("📈 ROI回测分析"):
                 hide_index=True
             )
             
-            st.markdown("**🏆 奖金明细**")
-            breakdown_df = pd.DataFrame([
-                {'奖级': '一等奖', '中奖注数': 0},
-                {'奖级': '二等奖', '中奖注数': 0},
-                {'奖级': '三等奖', '中奖注数': 0},
-                {'奖级': '四等奖', '中奖注数': 0},
-                {'奖级': '五等奖', '中奖注数': 0},
-                {'奖级': '六等奖', '中奖注数': 0},
-                {'奖级': '福运奖', '中奖注数': 0},
-            ])
-            st.dataframe(breakdown_df, width='stretch', hide_index=True)
-            
-            st.caption(f"回测期间：最近{backtest_periods}期 | 使用滚动窗口模式，每10期重新训练模型")
+            st.info("💡 方法3(LightGBM)和方法4(XGBoost)训练时间较长，请使用下方按钮单独测试")
+    
+    # 单独测试ML方法
+    st.markdown("---")
+    st.markdown("### 🤖 ML模型单独测试")
+    col_ml1, col_ml2 = st.columns(2)
+    with col_ml1:
+        if st.button("🚀 测试 LightGBM (方法3)", key="test_lgb"):
+            with st.spinner("正在测试 LightGBM，请耐心等待（约3-5分钟）..."):
+                result = backtest_roi(draws, "方法3", backtest_bets, min(10, backtest_periods))
+                st.success(f"方法3 (LightGBM) {min(10, backtest_periods)}期回测 ROI: {result.get('roi', 0):.1f}%")
+                st.json({
+                    "总成本": result.get('total_cost', 0),
+                    "总奖金": result.get('total_prize', 0),
+                    "净收益": result.get('net', 0),
+                    "中奖率": f"{result.get('win_rate', 0):.1f}%"
+                })
+    with col_ml2:
+        if st.button("🚀 测试 XGBoost (方法4)", key="test_xgb"):
+            with st.spinner("正在测试 XGBoost，请耐心等待（约5-10分钟）..."):
+                result = backtest_roi(draws, "方法4", backtest_bets, min(10, backtest_periods))
+                st.success(f"方法4 (XGBoost) {min(10, backtest_periods)}期回测 ROI: {result.get('roi', 0):.1f}%")
+                st.json({
+                    "总成本": result.get('total_cost', 0),
+                    "总奖金": result.get('total_prize', 0),
+                    "净收益": result.get('net', 0),
+                    "中奖率": f"{result.get('win_rate', 0):.1f}%"
+                })
+    
+    st.caption(f"💡 提示：ML模型回测建议使用10期以内，避免等待时间过长")
 
 st.markdown("---")
 
