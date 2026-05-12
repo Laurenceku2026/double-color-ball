@@ -3100,16 +3100,19 @@ with st.expander("📈 ROI回测分析"):
     if st.button("运行回测", key="backtest_btn"):
         with st.spinner("正在回测（使用滚动窗口模式，请耐心等待）..."):
             results_data = []
-            for method in ["方法1: 当前方法", "方法2: 胆拖混合", "方法3: LightGBM", "方法4: XGBoost+NN集成"]:
+            # 临时只测试方法1（先确认能正常运行，成功后再放开其他方法）
+            for method in ["方法1: 当前方法"]:
+            # for method in ["方法1: 当前方法", "方法2: 胆拖混合", "方法3: LightGBM", "方法4: XGBoost+NN集成"]:
                 method_name = method.split(":")[0] if ":" in method else method
                 result = backtest_roi(draws, method_name, backtest_bets, backtest_periods)
+                
                 results_data.append({
                     "方法": method,
-                    "ROI": result['roi'],
-                    "总成本": result['total_cost'],
-                    "总奖金": result['total_prize'],
-                    "净收益": result['net'],
-                    "中奖率": result['win_rate']
+                    "ROI": float(result.get('roi', 0)),
+                    "总成本": int(result.get('total_cost', 0)),
+                    "总奖金": int(result.get('total_prize', 0)),
+                    "净收益": int(result.get('net', 0)),
+                    "中奖率": float(result.get('win_rate', 0))
                 })
             
             df_results = pd.DataFrame(results_data)
@@ -3127,16 +3130,16 @@ with st.expander("📈 ROI回测分析"):
             )
             
             st.markdown("**🏆 奖金明细（方法4）**")
-            method4_result = backtest_roi(draws, "方法4: XGBoost+NN集成", backtest_bets, backtest_periods)
+            method4_result = backtest_roi(draws, "方法4", backtest_bets, backtest_periods)
             breakdown = method4_result.get('prize_breakdown', {})
             breakdown_df = pd.DataFrame([
-                {'奖级': '一等奖', '中奖注数': breakdown.get('first', 0)},
-                {'奖级': '二等奖', '中奖注数': breakdown.get('second', 0)},
-                {'奖级': '三等奖', '中奖注数': breakdown.get('third', 0)},
-                {'奖级': '四等奖', '中奖注数': breakdown.get('fourth', 0)},
-                {'奖级': '五等奖', '中奖注数': breakdown.get('fifth', 0)},
-                {'奖级': '六等奖', '中奖注数': breakdown.get('sixth', 0)},
-                {'奖级': '福运奖', '中奖注数': breakdown.get('fuyun', 0)},
+                {'奖级': '一等奖', '中奖注数': int(breakdown.get('first', 0))},
+                {'奖级': '二等奖', '中奖注数': int(breakdown.get('second', 0))},
+                {'奖级': '三等奖', '中奖注数': int(breakdown.get('third', 0))},
+                {'奖级': '四等奖', '中奖注数': int(breakdown.get('fourth', 0))},
+                {'奖级': '五等奖', '中奖注数': int(breakdown.get('fifth', 0))},
+                {'奖级': '六等奖', '中奖注数': int(breakdown.get('sixth', 0))},
+                {'奖级': '福运奖', '中奖注数': int(breakdown.get('fuyun', 0))},
             ])
             st.dataframe(breakdown_df, width='stretch', hide_index=True)
             
