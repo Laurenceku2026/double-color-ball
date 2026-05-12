@@ -1863,7 +1863,6 @@ class Method2DanTuo:
         return [num for num, _ in sorted_reds[:n]]
     
     def generate_bets(self, num_bets: int = 4, bet_type: str = "7+1") -> List[Dict]:
-        print("✅ 方法2正在执行（非回退）")
         """生成投注（支持复式扩展）"""
         anchors = self.select_anchors(num_anchors=2)
         red_scores = self.method1.calculate_red_scores()
