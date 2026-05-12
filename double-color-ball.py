@@ -2917,38 +2917,50 @@ with st.expander("📈 ROI回测分析"):
     with col2:
         backtest_bets = st.number_input("每期组数", min_value=1, max_value=10, value=4, key="backtest_bets")
     
-    if st.button("运行回测", key="backtest_btn"):
-        with st.spinner("正在回测（使用滚动窗口模式，请耐心等待）..."):
-            results = []
-            for method in ["方法1: 当前方法", "方法2: 胆拖混合", "方法3: LightGBM", "方法4: XGBoost+NN集成"]:
-                method_name = method.split(":")[0] if ":" in method else method
-                result = backtest_roi(draws, method_name, backtest_bets, backtest_periods)
-                results.append({
-                    "方法": method,
-                    "ROI": f"{result['roi']:.1f}%",
-                    "总成本": f"¥{result['total_cost']:,.0f}",
-                    "总奖金": f"¥{result['total_prize']:,.0f}",
-                    "净收益": f"¥{result['net']:,.0f}",
-                    "中奖率": f"{result['win_rate']:.1f}%"
-                })
-            
-            st.dataframe(pd.DataFrame(results), use_container_width=True, hide_index=True)
-            
-            st.markdown("**🏆 奖金明细（方法4）**")
-            method4_result = backtest_roi(draws, "方法4: XGBoost+NN集成", backtest_bets, backtest_periods)
-            breakdown = method4_result.get('prize_breakdown', {})
-            breakdown_df = pd.DataFrame([
-                {'奖级': '一等奖', '中奖注数': breakdown.get('first', 0)},
-                {'奖级': '二等奖', '中奖注数': breakdown.get('second', 0)},
-                {'奖级': '三等奖', '中奖注数': breakdown.get('third', 0)},
-                {'奖级': '四等奖', '中奖注数': breakdown.get('fourth', 0)},
-                {'奖级': '五等奖', '中奖注数': breakdown.get('fifth', 0)},
-                {'奖级': '六等奖', '中奖注数': breakdown.get('sixth', 0)},
-                {'奖级': '福运奖', '中奖注数': breakdown.get('fuyun', 0)},
-            ])
-            st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
-            
-            st.caption(f"回测期间：最近{backtest_periods}期 | 使用滚动窗口模式，每10期重新训练模型")
+if st.button("运行回测", key="backtest_btn"):
+    with st.spinner("正在回测（使用滚动窗口模式，请耐心等待）..."):
+        results_data = []  # 注意：变量名改为 results_data，避免与旧的 results 混淆
+        for method in ["方法1: 当前方法", "方法2: 胆拖混合", "方法3: LightGBM", "方法4: XGBoost+NN集成"]:
+            method_name = method.split(":")[0] if ":" in method else method
+            result = backtest_roi(draws, method_name, backtest_bets, backtest_periods)
+            results_data.append({
+                "方法": method,
+                "ROI": result['roi'],
+                "总成本": result['total_cost'],
+                "总奖金": result['total_prize'],
+                "净收益": result['net'],
+                "中奖率": result['win_rate']
+            })
+        
+        df_results = pd.DataFrame(results_data)
+        
+        st.dataframe(
+            df_results.style.format({
+                'ROI': '{:.1f}%',
+                '总成本': '¥{:.0f}',
+                '总奖金': '¥{:.0f}',
+                '净收益': '¥{:.0f}',
+                '中奖率': '{:.1f}%'
+            }),
+            width='stretch',
+            hide_index=True
+        )
+        
+        st.markdown("**🏆 奖金明细（方法4）**")
+        method4_result = backtest_roi(draws, "方法4: XGBoost+NN集成", backtest_bets, backtest_periods)
+        breakdown = method4_result.get('prize_breakdown', {})
+        breakdown_df = pd.DataFrame([
+            {'奖级': '一等奖', '中奖注数': breakdown.get('first', 0)},
+            {'奖级': '二等奖', '中奖注数': breakdown.get('second', 0)},
+            {'奖级': '三等奖', '中奖注数': breakdown.get('third', 0)},
+            {'奖级': '四等奖', '中奖注数': breakdown.get('fourth', 0)},
+            {'奖级': '五等奖', '中奖注数': breakdown.get('fifth', 0)},
+            {'奖级': '六等奖', '中奖注数': breakdown.get('sixth', 0)},
+            {'奖级': '福运奖', '中奖注数': breakdown.get('fuyun', 0)},
+        ])
+        st.dataframe(breakdown_df, width='stretch', hide_index=True)
+        
+        st.caption(f"回测期间：最近{backtest_periods}期 | 使用滚动窗口模式，每10期重新训练模型")
 
 st.markdown("---")
 
