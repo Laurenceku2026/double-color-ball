@@ -2481,7 +2481,190 @@ class BetGenerator:
         
         return bets
 
+# ============================================================
+# 回测函数（2026-05-12 添加）
+# ============================================================
 
+def calculate_prize_for_single_bet(bet: Dict, actual: Dict) -> Tuple[int, str]:
+    """
+    计算单注中奖金额和奖级描述
+    支持7+1、7+2、8+1复式
+    """
+    from itertools import combinations
+    
+    reds = bet['reds']
+    blues = bet.get('blues', [bet['blue']])
+    actual_reds = set(actual['reds'])
+    actual_blue = actual.get('blue', 0)
+    
+    total_prize = 0
+    best_level = "❌ 未中奖"
+    
+    for red_comb in combinations(reds, 6):
+        red_matches = len(set(red_comb) & actual_reds)
+        for blue in blues:
+            blue_match = (blue == actual_blue)
+            
+            if red_matches == 6 and blue_match:
+                prize = 5000000
+                level = "🏆 一等奖"
+            elif red_matches == 6:
+                prize = 500000
+                level = "🥈 二等奖"
+            elif red_matches == 5 and blue_match:
+                prize = 3000
+                level = "🥉 三等奖"
+            elif red_matches == 5 or (red_matches == 4 and blue_match):
+                prize = 200
+                level = "📦 四等奖"
+            elif red_matches == 4 or (red_matches == 3 and blue_match):
+                prize = 10
+                level = "🎫 五等奖"
+            elif blue_match:
+                prize = 5
+                level = "⭐ 六等奖"
+            elif red_matches == 3:
+                prize = 5
+                level = "🎁 福运奖"
+            else:
+                continue
+            
+            total_prize += prize
+            if "一等奖" in level and "一等奖" not in best_level:
+                best_level = level
+            elif "二等奖" in level and "一等奖" not in best_level and "二等奖" not in best_level:
+                best_level = level
+            elif prize > 0 and best_level == "❌ 未中奖":
+                best_level = level
+    
+    return total_prize, best_level
+
+
+def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookback: int = 50) -> Dict:
+    """
+    ROI回测函数 - 滚动窗口模式
+    每个方法使用不同的训练窗口大小：
+    - 方法1: 最近50期
+    - 方法2: 最近100期
+    - 方法3: 最近300期
+    - 方法4: 最近500期
+    """
+    window_sizes = {
+        "方法1": 50,
+        "方法2": 100,
+        "方法3": 300,
+        "方法4": 500
+    }
+    
+    window_size = window_sizes.get(method_name, 100)
+    start_period = window_size + 10
+    
+    if len(draws) < start_period:
+        return {"roi": 0, "total_cost": 0, "total_prize": 0, "net": 0, "win_rate": 0, "periods": 0}
+    
+    total_cost = 0
+    total_prize = 0
+    win_count = 0
+    prize_breakdown = {"first": 0, "second": 0, "third": 0, "fourth": 0, "fifth": 0, "sixth": 0, "fuyun": 0}
+    
+    trained_models = {}
+    method_seed_offset = {"方法1": 100, "方法2": 200, "方法3": 300, "方法4": 400}.get(method_name, 0)
+    
+    for i in range(start_period, len(draws)):
+        train_data = draws[i - window_size:i]
+        test_data = draws[i]
+        
+        # 设置种子
+        test_date = test_data.get('date')
+        if test_date:
+            try:
+                if isinstance(test_date, str):
+                    date_obj = datetime.strptime(test_date[:10], '%Y-%m-%d')
+                else:
+                    date_obj = test_date
+                seed_val = int(datetime(date_obj.year, date_obj.month, date_obj.day, 21, 15).timestamp()) + method_seed_offset
+                random.seed(seed_val)
+                np.random.seed(seed_val)
+            except:
+                random.seed(42 + method_seed_offset)
+                np.random.seed(42 + method_seed_offset)
+        else:
+            random.seed(42 + method_seed_offset)
+            np.random.seed(42 + method_seed_offset)
+        
+        # 生成投注
+        try:
+            if method_name == "方法1":
+                generator = Method1HotColdSum(train_data)
+                bets = generator.generate_bets(num_bets, "7+1")
+            elif method_name == "方法2":
+                generator = Method2DanTuo(train_data)
+                bets = generator.generate_bets(num_bets, "7+1")
+            elif method_name == "方法3":
+                model_key = f"method3_{i//10}"
+                if model_key not in trained_models:
+                    model = Method3LightGBM(train_data)
+                    model.train()
+                    trained_models[model_key] = model
+                bets = trained_models[model_key].generate_bets(num_bets, "7+1")
+            elif method_name == "方法4":
+                model_key = f"method4_{i//10}"
+                if model_key not in trained_models:
+                    model = Method4Ensemble(train_data)
+                    model.train()
+                    trained_models[model_key] = model
+                bets = trained_models[model_key].generate_bets(num_bets, "7+1")
+            else:
+                generator = Method1HotColdSum(train_data)
+                bets = generator.generate_bets(num_bets, "7+1")
+        except Exception as e:
+            print(f"投注生成失败 {method_name}: {e}")
+            bets = []
+            for _ in range(num_bets):
+                bets.append({
+                    'reds': sorted(np.random.choice(RED_NUMBERS, size=6, replace=False)),
+                    'blue': np.random.choice(BLUE_NUMBERS)
+                })
+        
+        # 计算奖金
+        period_prize = 0
+        for bet in bets:
+            prize, level = calculate_prize_for_single_bet(bet, test_data)
+            period_prize += prize
+            if "一等奖" in level:
+                prize_breakdown["first"] += 1
+            elif "二等奖" in level:
+                prize_breakdown["second"] += 1
+            elif "三等奖" in level:
+                prize_breakdown["third"] += 1
+            elif "四等奖" in level:
+                prize_breakdown["fourth"] += 1
+            elif "五等奖" in level:
+                prize_breakdown["fifth"] += 1
+            elif "六等奖" in level:
+                prize_breakdown["sixth"] += 1
+            elif "福运奖" in level:
+                prize_breakdown["fuyun"] += 1
+        
+        total_cost += num_bets * 14
+        total_prize += period_prize
+        if period_prize > 0:
+            win_count += 1
+    
+    periods = len(draws) - start_period
+    net = total_prize - total_cost
+    roi = (net / total_cost) * 100 if total_cost > 0 else 0
+    win_rate = (win_count / periods) * 100 if periods > 0 else 0
+    
+    return {
+        "roi": roi,
+        "total_cost": total_cost,
+        "total_prize": total_prize,
+        "net": net,
+        "win_rate": win_rate,
+        "periods": periods,
+        "prize_breakdown": prize_breakdown
+    }
 print("第4部分加载完成")
 print("=" * 60)
 print("请确认第4部分代码，输入 CONFIRM 后继续第5部分")
