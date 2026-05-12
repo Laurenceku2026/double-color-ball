@@ -1619,20 +1619,6 @@ def get_deepseek_suggestion(draws: List[Dict], source_used: str, ml_signals: Dic
         "ml_tip": ml_signals.get('suggestion_text', f"奖池{ml_signals['jackpot_level']}，{ml_signals['cycle']}")
     }
 
-
-# ==================== 修正后的ROI回测函数（滚动窗口） ====================
-st.dataframe(
-    pd.DataFrame(results).style.format({
-        'ROI': '{:.1f}%',
-        '总成本': '¥{:.0f}',
-        '总奖金': '¥{:.0f}',
-        '净收益': '¥{:.0f}',
-        '中奖率': '{:.1f}%'
-    }),
-    width='stretch',
-    hide_index=True
-)
-print("第3部分加载完成")
 # ============================================================
 # 第4部分：四种AI算法实现 + 复式扩展逻辑（7+1/7+2/8+1）
 # ============================================================
