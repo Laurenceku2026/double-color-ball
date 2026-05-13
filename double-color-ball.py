@@ -1695,7 +1695,9 @@ print("=" * 60)
 print("请确认第3部分代码，输入 CONFIRM 后继续第4部分")
 print("=" * 60)
 # ============================================================
-# 第4部分：5种AI算法 + 回测引擎 + 中奖计算
+# ============================================================
+# 第4部分：5种AI算法 + 回测引擎 + 中奖计算（修复版）
+# 修复内容：回测函数添加日期种子（当期日期+21:15）
 # ============================================================
 
 from itertools import combinations
@@ -2526,14 +2528,22 @@ class BetGenerator:
         return generate_ensemble_bets(draws, num_bets, bet_type)
 
 
-# ==================== 优化版回测函数 ====================
+# ==================== 优化版回测函数（修复：添加日期种子） ====================
 def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookback: int = 10) -> Dict:
     """
-    优化版ROI回测
+    优化版ROI回测 - 修复版
     - 使用降低后的训练窗口
     - 每5期重训练一次，避免每期训练
-    - 添加进度条支持
+    - 每期使用当期日期+21:15作为随机种子（确保可重现）
     """
+    # 方法偏移量（确保不同方法使用不同种子）
+    method_seed_offset = {
+        "方法1": 100,
+        "方法2": 200,
+        "方法3": 300,
+        "方法4": 400
+    }.get(method_name, 0)
+    
     # 获取训练窗口
     train_window = TRAIN_WINDOWS.get(method_name, 100)
     
@@ -2556,6 +2566,41 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
     
     for idx in range(lookback):
         i = train_window + idx
+        test_data = draws[i]
+        
+        # ========== 设置当期随机种子（基于开奖日期+21:15） ==========
+        test_date = test_data.get('date')
+        if test_date:
+            try:
+                if isinstance(test_date, str):
+                    # 处理日期格式
+                    date_str = test_date[:10]
+                    # 支持 YYYY-MM-DD 和 YYYY/MM/DD
+                    if '-' in date_str:
+                        date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+                    elif '/' in date_str:
+                        date_obj = datetime.strptime(date_str, '%Y/%m/%d')
+                    else:
+                        date_obj = datetime.now()
+                else:
+                    date_obj = test_date
+                
+                # 使用开奖日 21:15（双色球开奖时间）作为种子基础
+                seed_val = int(datetime(date_obj.year, date_obj.month, date_obj.day, 21, 15).timestamp())
+                seed_val += method_seed_offset  # 加上方法偏移量
+                random.seed(seed_val)
+                np.random.seed(seed_val)
+            except Exception as e:
+                # 如果日期解析失败，使用默认种子
+                random.seed(42 + method_seed_offset + i)
+                np.random.seed(42 + method_seed_offset + i)
+        else:
+            # 没有日期时，使用期号作为种子
+            period = test_data.get('period', i)
+            if isinstance(period, str) and period.isdigit():
+                period = int(period)
+            random.seed(hash(period) + method_seed_offset)
+            np.random.seed(hash(period) + method_seed_offset)
         
         # 每5期重新训练一次
         model_key = f"{method_name}_{i // retrain_interval}"
@@ -2586,7 +2631,6 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
             bets = trained_models[model_key]
         
         # 计算奖金
-        test_data = draws[i]
         period_prize = 0
         
         for bet in bets:
@@ -2630,7 +2674,7 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
     }
 
 
-print("第4部分加载完成")
+print("第4部分加载完成（修复版 - 含日期种子）")
 print("=" * 60)
 print("请确认第4部分代码，输入 CONFIRM 后继续第5部分")
 print("=" * 60)
