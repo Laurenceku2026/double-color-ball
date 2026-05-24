@@ -1224,14 +1224,14 @@ def sync_to_supabase_from_17500(max_periods: int = 500):
     
     progress_placeholder = st.empty()
     
-    # 步骤1：获取数据库中最新期号
+    # 步骤1：获取数据库中最新期号（5位格式）
     try:
         response = supabase.schema('ssq_schema').table('ssq_draws')\
             .select("period").order("period", desc=True).limit(1).execute()
         
         if response.data:
             latest_period_in_db = response.data[0]["period"]
-            latest_num = int(latest_period_in_db)
+            latest_num = int(latest_period_in_db)  # 5位数字，如 26052
             progress_placeholder.info(f"📊 数据库中最新期号: {latest_period_in_db}")
         else:
             latest_num = 0
@@ -1248,11 +1248,12 @@ def sync_to_supabase_from_17500(max_periods: int = 500):
         progress_placeholder.error("❌ 获取数据失败")
         return {"success": False, "error": "获取数据失败"}
     
-    # 步骤3：筛选出新期号（期号 > 数据库中最新期号）
+    # 步骤3：筛选出新期号（将7位期号转为5位再比较）
     new_draws = []
     for draw in full_draws:
-        period_num = int(draw['period'])
-        if period_num > latest_num:
+        # 关键修改：7位期号 "2026057" → 5位数字 26057
+        period_5digit = int(draw['period'][2:])  # 去掉前两位 "20"
+        if period_5digit > latest_num:
             new_draws.append(draw)
         else:
             break  # 数据是降序的，遇到 <= 的就停止
@@ -1263,16 +1264,18 @@ def sync_to_supabase_from_17500(max_periods: int = 500):
     
     progress_placeholder.info(f"📊 发现 {len(new_draws)} 期新数据，正在插入...")
     
-    # 步骤4：插入新数据（从旧到新，避免期号冲突）
-    new_draws.reverse()  # 变成升序，从最旧的开始插入
+    # 步骤4：插入新数据（从旧到新）
+    new_draws.reverse()  # 变成升序
     inserted = 0
     
     for i, draw in enumerate(new_draws):
         progress_placeholder.info(f"💾 正在插入 ({i+1}/{len(new_draws)}): {draw['period']}")
         try:
             reds = draw['reds']
+            # 注意：插入时用5位期号
+            period_5digit = draw['period'][2:]  # "2026057" → "26057"
             data = {
-                "period": draw['period'],
+                "period": period_5digit,  # 存储5位期号
                 "date": draw['date'],
                 "red1": reds[0], "red2": reds[1], "red3": reds[2],
                 "red4": reds[3], "red5": reds[4], "red6": reds[5],
@@ -1300,7 +1303,7 @@ def sync_to_supabase_from_17500(max_periods: int = 500):
         all_periods = [row["period"] for row in response.data] if response.data else []
         
         if len(all_periods) > max_periods:
-            to_delete = all_periods[:-max_periods]  # 删除最旧的
+            to_delete = all_periods[:-max_periods]
             for period in to_delete:
                 try:
                     supabase.schema('ssq_schema').table('ssq_draws')\
@@ -1313,7 +1316,7 @@ def sync_to_supabase_from_17500(max_periods: int = 500):
     
     # 步骤6：显示结果
     if inserted > 0:
-        progress_placeholder.success(f"✅ 成功添加 {inserted} 期新数据（最新: {new_draws[-1]['period']}）")
+        progress_placeholder.success(f"✅ 成功添加 {inserted} 期新数据（最新: {new_draws[-1]['period'][2:]}）")
     if deleted > 0:
         progress_placeholder.info(f"🗑️ 清理了 {deleted} 期旧数据，保留最新 {max_periods} 期")
     
