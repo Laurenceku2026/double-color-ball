@@ -1149,16 +1149,16 @@ print("=" * 60)
 # ==================== 从 17500.cn 获取数据 ====================
 def fetch_ssq_from_17500() -> Optional[List[Dict]]:
     """
-    从 17500.cn 获取完整双色球数据
-    返回格式与数据库兼容
+    从 17500.cn 获取完整双色球数据（全量3454期）
+    返回格式与数据库兼容，按期号降序排列（最新在前）
     """
-    print("正在从 17500.cn 获取数据...")
+    import requests
     
     url = "http://data.17500.cn/ssq_desc.txt"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
     try:
-        response = requests.get(url, headers=headers, timeout=30)
+        response = requests.get(url, headers=headers, timeout=15)
         response.encoding = 'utf-8'
         
         if response.status_code != 200:
@@ -1166,7 +1166,7 @@ def fetch_ssq_from_17500() -> Optional[List[Dict]]:
             return None
         
         lines = response.text.strip().split('\n')
-        print(f"获取到 {len(lines)} 行数据")
+        print(f"获取到 {len(lines)} 行原始数据")
         
         draws = []
         for line in lines:
@@ -1203,7 +1203,7 @@ def fetch_ssq_from_17500() -> Optional[List[Dict]]:
             except Exception as e:
                 continue
         
-        # 按期号降序排序
+        # 按期号降序排序（最新在前）
         draws.sort(key=lambda x: int(x['period']), reverse=True)
         
         print(f"成功解析 {len(draws)} 期数据")
@@ -1216,80 +1216,83 @@ def fetch_ssq_from_17500() -> Optional[List[Dict]]:
 #-------
 def sync_to_supabase_from_17500(max_periods: int = 500):
     """
-    从 17500.cn 获取数据并同步到 Supabase
-    只添加比数据库最新期号更新的数据，然后保留最新500期
+    从 17500.cn 获取全量数据 → 筛选新期号 → 只插入新增数据 → 保持500期
     """
     supabase = init_supabase()
     if supabase is None:
         return {"success": False, "error": "Supabase连接失败"}
     
-    # 1. 获取数据库中现有期号，并找到最新期号
+    progress_placeholder = st.empty()
+    
+    # 步骤1：获取数据库中最新期号
     try:
         response = supabase.schema('ssq_schema').table('ssq_draws')\
             .select("period").order("period", desc=True).limit(1).execute()
         
         if response.data:
             latest_period_in_db = response.data[0]["period"]
-            print(f"数据库中最新期号: {latest_period_in_db}")
+            latest_num = int(latest_period_in_db)
+            progress_placeholder.info(f"📊 数据库中最新期号: {latest_period_in_db}")
         else:
-            latest_period_in_db = "0"
-            print("数据库为空，将导入全部数据")
+            latest_num = 0
+            progress_placeholder.info("📊 数据库为空，将导入数据")
     except Exception as e:
-        print(f"查询现有数据失败: {e}")
-        latest_period_in_db = "0"
+        progress_placeholder.warning(f"查询数据库失败: {e}")
+        latest_num = 0
     
-    # 2. 从 17500.cn 获取新数据
-    with st.spinner("正在从 17500.cn 获取最新数据..."):
-        new_draws = fetch_ssq_from_17500()
+    # 步骤2：从17500.cn获取全量数据
+    progress_placeholder.info("📡 正在从 17500.cn 获取全量数据...")
+    full_draws = fetch_ssq_from_17500()
     
-    if not new_draws:
+    if not full_draws:
+        progress_placeholder.error("❌ 获取数据失败")
         return {"success": False, "error": "获取数据失败"}
     
-    # 3. 找出比数据库最新期号更新的数据（只添加新数据）
-    latest_num = int(latest_period_in_db)
-    added_draws = []
-    
-    for draw in new_draws:
+    # 步骤3：筛选出新期号（期号 > 数据库中最新期号）
+    new_draws = []
+    for draw in full_draws:
         period_num = int(draw['period'])
         if period_num > latest_num:
-            added_draws.append(draw)
+            new_draws.append(draw)
         else:
-            break  # 因为数据是按降序排列的，遇到 <= 最新期号的就停止
+            break  # 数据是降序的，遇到 <= 的就停止
     
-    print(f"发现 {len(added_draws)} 期新数据")
+    if not new_draws:
+        progress_placeholder.info("📭 没有新数据需要更新")
+        return {"success": True, "inserted": 0, "deleted": 0}
     
-    # 4. 插入新数据（按期号升序，从旧到新）
+    progress_placeholder.info(f"📊 发现 {len(new_draws)} 期新数据，正在插入...")
+    
+    # 步骤4：插入新数据（从旧到新，避免期号冲突）
+    new_draws.reverse()  # 变成升序，从最旧的开始插入
     inserted = 0
-    if added_draws:
-        # 反转，从最旧的开始插入
-        added_draws.reverse()
-        
-        for draw in added_draws:
-            try:
-                reds = draw['reds']
-                data = {
-                    "period": draw['period'],
-                    "date": draw['date'],
-                    "red1": reds[0], "red2": reds[1], "red3": reds[2],
-                    "red4": reds[3], "red5": reds[4], "red6": reds[5],
-                    "blue": draw['blue'],
-                    "pool_amount": draw.get('pool', 0),
-                    "total_sales": draw.get('sales', 0),
-                    "prize1_count": draw.get('prize1_count', 0),
-                    "prize1_amount": draw.get('prize1_amount', 0),
-                    "prize2_count": draw.get('prize2_count', 0),
-                    "prize2_amount": draw.get('prize2_amount', 0)
-                }
-                supabase.schema('ssq_schema').table('ssq_draws').insert(data).execute()
-                inserted += 1
-                print(f"✅ 插入期号 {draw['period']}")
-            except Exception as e:
-                print(f"❌ 插入期号 {draw['period']} 失败: {e}")
-    else:
-        print("没有新数据需要添加")
     
-    # 5. 清理旧数据，只保留最新 max_periods 期
+    for i, draw in enumerate(new_draws):
+        progress_placeholder.info(f"💾 正在插入 ({i+1}/{len(new_draws)}): {draw['period']}")
+        try:
+            reds = draw['reds']
+            data = {
+                "period": draw['period'],
+                "date": draw['date'],
+                "red1": reds[0], "red2": reds[1], "red3": reds[2],
+                "red4": reds[3], "red5": reds[4], "red6": reds[5],
+                "blue": draw['blue'],
+                "pool_amount": draw.get('pool', 0),
+                "total_sales": draw.get('sales', 0),
+                "prize1_count": draw.get('prize1_count', 0),
+                "prize1_amount": draw.get('prize1_amount', 0),
+                "prize2_count": draw.get('prize2_count', 0),
+                "prize2_amount": draw.get('prize2_amount', 0)
+            }
+            supabase.schema('ssq_schema').table('ssq_draws').insert(data).execute()
+            inserted += 1
+        except Exception as e:
+            print(f"插入期号 {draw['period']} 失败: {e}")
+    
+    # 步骤5：保持500期（删除最旧的）
     deleted = 0
+    progress_placeholder.info("🗑️ 正在检查并清理旧数据...")
+    
     try:
         response = supabase.schema('ssq_schema').table('ssq_draws')\
             .select("period").order("period", desc=False).execute()
@@ -1303,26 +1306,25 @@ def sync_to_supabase_from_17500(max_periods: int = 500):
                     supabase.schema('ssq_schema').table('ssq_draws')\
                         .delete().eq("period", period).execute()
                     deleted += 1
-                    print(f"🗑️ 删除旧期号 {period}")
                 except Exception as e:
                     print(f"删除期号 {period} 失败: {e}")
     except Exception as e:
         print(f"清理旧数据失败: {e}")
     
-    # 6. 显示结果
+    # 步骤6：显示结果
     if inserted > 0:
-        st.success(f"✅ 成功添加 {inserted} 期新数据（最新期号: {added_draws[-1]['period'] if added_draws else 'N/A'}）")
+        progress_placeholder.success(f"✅ 成功添加 {inserted} 期新数据（最新: {new_draws[-1]['period']}）")
     if deleted > 0:
-        st.info(f"🗑️ 自动清理了 {deleted} 期旧数据，保留最新 {max_periods} 期")
-    if inserted == 0 and deleted == 0:
-        st.info("📭 数据库已是最新，无需更新")
+        progress_placeholder.info(f"🗑️ 清理了 {deleted} 期旧数据，保留最新 {max_periods} 期")
     
     return {
         "success": True,
         "inserted": inserted,
-        "deleted": deleted,
-        "latest_period": added_draws[-1]['period'] if added_draws else latest_period_in_db
+        "deleted": deleted
     }
+#-----
+
+
 # ==================== 冷热码分析 ====================
 def get_hot_cold_analysis(draws: List[Dict], analysis_periods: int = 100):
     """
@@ -3192,21 +3194,27 @@ if not draws or len(draws) < 5:
     st.stop()
 
 # ==================== 显示数据概览 ====================
-st.subheader("📊 数据概览")
+# ==================== 数据概览 ====================
+col_title, col_button = st.columns([3, 2])
 
-# 添加更新按钮行
-col_refresh, col_info1, col_info2, col_info3, col_info4, col_info5 = st.columns([1, 1, 1, 1, 1, 1])
+with col_title:
+    st.subheader("📊 数据概览")
 
-with col_refresh:
-    if st.button("🔄 一键更新数据", type="primary", help="从 17500.cn 获取最新数据并同步到数据库"):
+with col_button:
+    progress_placeholder = st.empty()
+    
+    if st.button("🔄 一键更新数据", type="primary", use_container_width=True):
+        progress_placeholder.info("⏳ 正在更新数据，请稍候...")
+        
         result = sync_to_supabase_from_17500(max_periods=500)
+        
         if result["success"]:
             if result["inserted"] > 0:
-                st.success(f"✅ 成功添加 {result['inserted']} 期新数据")
+                progress_placeholder.success(f"✅ 成功添加 {result['inserted']} 期新数据")
             if result["deleted"] > 0:
-                st.info(f"🗑️ 自动清理了 {result['deleted']} 期旧数据，保留最新500期")
+                progress_placeholder.info(f"🗑️ 清理了 {result['deleted']} 期旧数据，保留最新500期")
             if result["inserted"] == 0 and result["deleted"] == 0:
-                st.info("📭 数据库已是最新，无需更新")
+                progress_placeholder.info("📭 数据库已是最新，无需更新")
             
             # 重新加载数据
             refreshed_draws = load_all_from_supabase()
@@ -3215,22 +3223,24 @@ with col_refresh:
                 st.session_state['draws_loaded'] = refreshed_draws
             st.rerun()
         else:
-            st.error(f"❌ 更新失败: {result.get('error', '未知错误')}")
+            progress_placeholder.error(f"❌ 更新失败: {result.get('error', '未知错误')}")
 
+# 显示数据指标
 latest = draws[-1] if draws else {}
 oldest = draws[0] if draws else {}
 
-with col_info1:
+col1, col2, col3, col4, col5 = st.columns(5)
+with col1:
     st.metric("最新期号", latest.get('period', 'N/A'))
-with col_info2:
+with col2:
     date_val = latest.get('date', '')
     st.metric("最新日期", str(date_val)[:10] if date_val else 'N/A')
-with col_info3:
+with col3:
     st.metric("最早期号", oldest.get('period', 'N/A'))
-with col_info4:
+with col4:
     pool = latest.get('pool', 0)
     st.metric("奖池金额", f"¥{pool/1e8:.1f}亿" if pool > 0 else "N/A")
-with col_info5:
+with col5:
     st.metric("数据总量", f"{len(draws)}期")
 
 st.markdown("---")
