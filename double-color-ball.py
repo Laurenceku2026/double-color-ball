@@ -1213,42 +1213,58 @@ def fetch_ssq_from_17500() -> Optional[List[Dict]]:
         st.error(f"获取数据失败: {e}")
         return None
 
-
+#-------
 def sync_to_supabase_from_17500(max_periods: int = 500):
     """
     从 17500.cn 获取数据并同步到 Supabase
-    只保留最新 max_periods 期
+    只添加比数据库最新期号更新的数据，然后保留最新500期
     """
     supabase = init_supabase()
     if supabase is None:
         return {"success": False, "error": "Supabase连接失败"}
     
-    # 1. 获取新数据
+    # 1. 获取数据库中现有期号，并找到最新期号
+    try:
+        response = supabase.schema('ssq_schema').table('ssq_draws')\
+            .select("period").order("period", desc=True).limit(1).execute()
+        
+        if response.data:
+            latest_period_in_db = response.data[0]["period"]
+            print(f"数据库中最新期号: {latest_period_in_db}")
+        else:
+            latest_period_in_db = "0"
+            print("数据库为空，将导入全部数据")
+    except Exception as e:
+        print(f"查询现有数据失败: {e}")
+        latest_period_in_db = "0"
+    
+    # 2. 从 17500.cn 获取新数据
     with st.spinner("正在从 17500.cn 获取最新数据..."):
         new_draws = fetch_ssq_from_17500()
     
     if not new_draws:
         return {"success": False, "error": "获取数据失败"}
     
-    # 2. 获取数据库中现有期号
-    try:
-        response = supabase.schema('ssq_schema').table('ssq_draws')\
-            .select("period").execute()
-        existing_periods = {row["period"] for row in response.data} if response.data else set()
-    except Exception as e:
-        print(f"查询现有数据失败: {e}")
-        existing_periods = set()
+    # 3. 找出比数据库最新期号更新的数据（只添加新数据）
+    latest_num = int(latest_period_in_db)
+    added_draws = []
     
-    # 3. 找出新期号（数据库中不存在的）
-    new_periods_list = []
     for draw in new_draws:
-        if draw['period'] not in existing_periods:
-            new_periods_list.append(draw)
+        period_num = int(draw['period'])
+        if period_num > latest_num:
+            added_draws.append(draw)
+        else:
+            break  # 因为数据是按降序排列的，遇到 <= 最新期号的就停止
     
-    # 4. 插入新数据
+    print(f"发现 {len(added_draws)} 期新数据")
+    
+    # 4. 插入新数据（按期号升序，从旧到新）
     inserted = 0
-    if new_periods_list:
-        for draw in new_periods_list[:max_periods]:
+    if added_draws:
+        # 反转，从最旧的开始插入
+        added_draws.reverse()
+        
+        for draw in added_draws:
             try:
                 reds = draw['reds']
                 data = {
@@ -1266,8 +1282,11 @@ def sync_to_supabase_from_17500(max_periods: int = 500):
                 }
                 supabase.schema('ssq_schema').table('ssq_draws').insert(data).execute()
                 inserted += 1
+                print(f"✅ 插入期号 {draw['period']}")
             except Exception as e:
-                print(f"插入期号 {draw['period']} 失败: {e}")
+                print(f"❌ 插入期号 {draw['period']} 失败: {e}")
+    else:
+        print("没有新数据需要添加")
     
     # 5. 清理旧数据，只保留最新 max_periods 期
     deleted = 0
@@ -1278,22 +1297,31 @@ def sync_to_supabase_from_17500(max_periods: int = 500):
         all_periods = [row["period"] for row in response.data] if response.data else []
         
         if len(all_periods) > max_periods:
-            to_delete = all_periods[:-max_periods]
+            to_delete = all_periods[:-max_periods]  # 删除最旧的
             for period in to_delete:
                 try:
                     supabase.schema('ssq_schema').table('ssq_draws')\
                         .delete().eq("period", period).execute()
                     deleted += 1
+                    print(f"🗑️ 删除旧期号 {period}")
                 except Exception as e:
                     print(f"删除期号 {period} 失败: {e}")
     except Exception as e:
         print(f"清理旧数据失败: {e}")
     
+    # 6. 显示结果
+    if inserted > 0:
+        st.success(f"✅ 成功添加 {inserted} 期新数据（最新期号: {added_draws[-1]['period'] if added_draws else 'N/A'}）")
+    if deleted > 0:
+        st.info(f"🗑️ 自动清理了 {deleted} 期旧数据，保留最新 {max_periods} 期")
+    if inserted == 0 and deleted == 0:
+        st.info("📭 数据库已是最新，无需更新")
+    
     return {
         "success": True,
         "inserted": inserted,
         "deleted": deleted,
-        "total": len(new_draws)
+        "latest_period": added_draws[-1]['period'] if added_draws else latest_period_in_db
     }
 # ==================== 冷热码分析 ====================
 def get_hot_cold_analysis(draws: List[Dict], analysis_periods: int = 100):
