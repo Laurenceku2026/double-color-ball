@@ -1146,7 +1146,155 @@ print("=" * 60)
 # ============================================================
 # 第3部分：分析引擎（冷热码、3分区、和值、蓝球、ML信号）
 # ============================================================
+# ==================== 从 17500.cn 获取数据 ====================
+def fetch_ssq_from_17500() -> Optional[List[Dict]]:
+    """
+    从 17500.cn 获取完整双色球数据
+    返回格式与数据库兼容
+    """
+    print("正在从 17500.cn 获取数据...")
+    
+    url = "http://data.17500.cn/ssq_desc.txt"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+        response.encoding = 'utf-8'
+        
+        if response.status_code != 200:
+            st.error(f"数据获取失败: {response.status_code}")
+            return None
+        
+        lines = response.text.strip().split('\n')
+        print(f"获取到 {len(lines)} 行数据")
+        
+        draws = []
+        for line in lines:
+            if not line.strip():
+                continue
+            parts = line.strip().split()
+            if len(parts) < 21:
+                continue
+            
+            try:
+                period = parts[0]
+                date_raw = parts[1]
+                # 统一日期格式
+                if len(date_raw) == 8 and '-' not in date_raw:
+                    date = f"{date_raw[:4]}-{date_raw[4:6]}-{date_raw[6:8]}"
+                else:
+                    date = date_raw
+                
+                draws.append({
+                    'period': str(period),
+                    'date': date,
+                    'reds': [
+                        int(parts[2]), int(parts[3]), int(parts[4]),
+                        int(parts[5]), int(parts[6]), int(parts[7])
+                    ],
+                    'blue': int(parts[8]),
+                    'pool': int(parts[16]) if len(parts) > 16 else 0,
+                    'sales': int(parts[15]) if len(parts) > 15 else 0,
+                    'prize1_count': int(parts[17]) if len(parts) > 17 else 0,
+                    'prize1_amount': int(parts[18]) if len(parts) > 18 else 0,
+                    'prize2_count': int(parts[19]) if len(parts) > 19 else 0,
+                    'prize2_amount': int(parts[20]) if len(parts) > 20 else 0,
+                })
+            except Exception as e:
+                continue
+        
+        # 按期号降序排序
+        draws.sort(key=lambda x: int(x['period']), reverse=True)
+        
+        print(f"成功解析 {len(draws)} 期数据")
+        return draws
+        
+    except Exception as e:
+        st.error(f"获取数据失败: {e}")
+        return None
 
+
+def sync_to_supabase_from_17500(max_periods: int = 500):
+    """
+    从 17500.cn 获取数据并同步到 Supabase
+    只保留最新 max_periods 期
+    """
+    supabase = init_supabase()
+    if supabase is None:
+        return {"success": False, "error": "Supabase连接失败"}
+    
+    # 1. 获取新数据
+    with st.spinner("正在从 17500.cn 获取最新数据..."):
+        new_draws = fetch_ssq_from_17500()
+    
+    if not new_draws:
+        return {"success": False, "error": "获取数据失败"}
+    
+    # 2. 获取数据库中现有期号
+    try:
+        response = supabase.schema('ssq_schema').table('ssq_draws')\
+            .select("period").execute()
+        existing_periods = {row["period"] for row in response.data} if response.data else set()
+    except Exception as e:
+        print(f"查询现有数据失败: {e}")
+        existing_periods = set()
+    
+    # 3. 找出新期号（数据库中不存在的）
+    new_periods_list = []
+    for draw in new_draws:
+        if draw['period'] not in existing_periods:
+            new_periods_list.append(draw)
+    
+    # 4. 插入新数据
+    inserted = 0
+    if new_periods_list:
+        for draw in new_periods_list[:max_periods]:
+            try:
+                reds = draw['reds']
+                data = {
+                    "period": draw['period'],
+                    "date": draw['date'],
+                    "red1": reds[0], "red2": reds[1], "red3": reds[2],
+                    "red4": reds[3], "red5": reds[4], "red6": reds[5],
+                    "blue": draw['blue'],
+                    "pool_amount": draw.get('pool', 0),
+                    "total_sales": draw.get('sales', 0),
+                    "prize1_count": draw.get('prize1_count', 0),
+                    "prize1_amount": draw.get('prize1_amount', 0),
+                    "prize2_count": draw.get('prize2_count', 0),
+                    "prize2_amount": draw.get('prize2_amount', 0)
+                }
+                supabase.schema('ssq_schema').table('ssq_draws').insert(data).execute()
+                inserted += 1
+            except Exception as e:
+                print(f"插入期号 {draw['period']} 失败: {e}")
+    
+    # 5. 清理旧数据，只保留最新 max_periods 期
+    deleted = 0
+    try:
+        response = supabase.schema('ssq_schema').table('ssq_draws')\
+            .select("period").order("period", desc=False).execute()
+        
+        all_periods = [row["period"] for row in response.data] if response.data else []
+        
+        if len(all_periods) > max_periods:
+            to_delete = all_periods[:-max_periods]
+            for period in to_delete:
+                try:
+                    supabase.schema('ssq_schema').table('ssq_draws')\
+                        .delete().eq("period", period).execute()
+                    deleted += 1
+                except Exception as e:
+                    print(f"删除期号 {period} 失败: {e}")
+    except Exception as e:
+        print(f"清理旧数据失败: {e}")
+    
+    return {
+        "success": True,
+        "inserted": inserted,
+        "deleted": deleted,
+        "total": len(new_draws)
+    }
 # ==================== 冷热码分析 ====================
 def get_hot_cold_analysis(draws: List[Dict], analysis_periods: int = 100):
     """
@@ -3017,21 +3165,44 @@ if not draws or len(draws) < 5:
 
 # ==================== 显示数据概览 ====================
 st.subheader("📊 数据概览")
-latest = draws[-1]
-oldest = draws[0]
 
-col1, col2, col3, col4, col5 = st.columns(5)
-with col1:
+# 添加更新按钮行
+col_refresh, col_info1, col_info2, col_info3, col_info4, col_info5 = st.columns([1, 1, 1, 1, 1, 1])
+
+with col_refresh:
+    if st.button("🔄 一键更新数据", type="primary", help="从 17500.cn 获取最新数据并同步到数据库"):
+        result = sync_to_supabase_from_17500(max_periods=500)
+        if result["success"]:
+            if result["inserted"] > 0:
+                st.success(f"✅ 成功添加 {result['inserted']} 期新数据")
+            if result["deleted"] > 0:
+                st.info(f"🗑️ 自动清理了 {result['deleted']} 期旧数据，保留最新500期")
+            if result["inserted"] == 0 and result["deleted"] == 0:
+                st.info("📭 数据库已是最新，无需更新")
+            
+            # 重新加载数据
+            refreshed_draws = load_all_from_supabase()
+            if refreshed_draws:
+                refreshed_draws = fill_missing_with_history(refreshed_draws)
+                st.session_state['draws_loaded'] = refreshed_draws
+            st.rerun()
+        else:
+            st.error(f"❌ 更新失败: {result.get('error', '未知错误')}")
+
+latest = draws[-1] if draws else {}
+oldest = draws[0] if draws else {}
+
+with col_info1:
     st.metric("最新期号", latest.get('period', 'N/A'))
-with col2:
+with col_info2:
     date_val = latest.get('date', '')
     st.metric("最新日期", str(date_val)[:10] if date_val else 'N/A')
-with col3:
+with col_info3:
     st.metric("最早期号", oldest.get('period', 'N/A'))
-with col4:
+with col_info4:
     pool = latest.get('pool', 0)
-    st.metric("奖池金额", f"¥{pool/1e8:.1f}亿")
-with col5:
+    st.metric("奖池金额", f"¥{pool/1e8:.1f}亿" if pool > 0 else "N/A")
+with col_info5:
     st.metric("数据总量", f"{len(draws)}期")
 
 st.markdown("---")
