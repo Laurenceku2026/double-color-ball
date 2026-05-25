@@ -122,21 +122,28 @@ ZONES = {
     3: {'name': '大号区', 'range': '23-33', 'numbers': list(range(23, 34))}
 }
 
-# ==================== 训练窗口配置（优化版） ====================
-# 降低训练窗口，避免回测超时
+# ==================== 训练窗口配置（修正版 v15.0） ====================
+
+# 选号方法训练窗口（用于生成投注）
 TRAIN_WINDOWS = {
-    "方法1": 50,    # 冷热码法
-    "方法2": 80,    # 胆拖混合法
-    "方法3": 100,   # LightGBM（原300）
-    "方法4": 120    # XGBoost（原500）
+    "方法1": 100,    # 新规则系统 - 需要100期分析疏密周期和蓝球规律
+    "方法2": 100,    # 胆拖混合 - 依赖方法1，使用相同窗口
+    "方法3": 100,    # LightGBM - ML模型
+    "方法4": 120,    # XGBoost - ML模型需要更多数据
 }
 
-# 最小训练数据量
+# 方法5综合模式使用最大窗口
+METHOD5_WINDOW = 120
+
+# ML智能分析引擎固定窗口（用于判断是否投注，与选号方法无关）
+ML_SIGNAL_WINDOW = 50  # 回测验证的最佳窗口
+
+# 最小训练数据量（对应调整）
 MIN_TRAIN_DATA = {
-    "方法1": 30,
-    "方法2": 50,
-    "方法3": 80,
-    "方法4": 100
+    "方法1": 50,     # 新规则系统最小需要50期
+    "方法2": 50,     # 胆拖混合最小50期
+    "方法3": 80,     # LightGBM最小80期
+    "方法4": 100,    # XGBoost最小100期
 }
 
 # ==================== DeepSeek 配置 ====================
@@ -1600,10 +1607,13 @@ def get_target_sum(draws: List[Dict]) -> Tuple[int, int]:
 # ==================== ML信号分析 ====================
 def calculate_ml_signals(draws: List[Dict]) -> Dict:
     """
-    计算ML特征信号
+    计算ML特征信号（固定50期窗口版本 v15.0）
+    
+    关键修改：固定使用最近50期数据，与选号方法无关
     包含：奖池分析、剪刀差、周期预测、动态注数等
     """
-    if not draws or len(draws) < 10:
+    # 固定使用最近50期数据
+    if len(draws) < 10:
         return {
             'jackpot_level': '数据不足',
             'scissors': '数据不足',
@@ -1626,7 +1636,13 @@ def calculate_ml_signals(draws: List[Dict]) -> Dict:
             'reason_text': ''
         }
     
-    latest = draws[-1]
+    # 固定使用最近50期数据（关键修改！）
+    if len(draws) > 50:
+        recent_draws = draws[-50:]
+    else:
+        recent_draws = draws
+    
+    latest = recent_draws[-1]
     pool = latest.get('pool', 0)
     sales = latest.get('sales', 0)
     
@@ -1641,9 +1657,9 @@ def calculate_ml_signals(draws: List[Dict]) -> Dict:
         jackpot_level = "LOW (<1.5亿) ❄️"
         signal_strength = 0
     
-    # 2. 剪刀差信号（投注额与奖池变化）
-    if len(draws) >= 2:
-        prev = draws[-2]
+    # 2. 剪刀差信号（基于50期内数据）
+    if len(recent_draws) >= 2:
+        prev = recent_draws[-2]
         prev_pool = prev.get('pool', 0)
         prev_sales = prev.get('sales', 0)
         
@@ -1664,13 +1680,13 @@ def calculate_ml_signals(draws: List[Dict]) -> Dict:
     else:
         scissors = "NORMAL ✅"
     
-    # 3. 头奖周期预测
-    recent_prizes = [d.get('prize1_count', 0) for d in draws[-20:]]
+    # 3. 头奖周期预测（基于50期内数据）
+    recent_prizes = [d.get('prize1_count', 0) for d in recent_draws[-20:]]
     high_prize_count = sum(1 for p in recent_prizes if p >= 10)
     
-    # 计算距离上次爆发的期数
+    # 计算距离上次爆发的期数（在50期内搜索）
     last_burst = None
-    for idx, d in enumerate(reversed(draws)):
+    for idx, d in enumerate(reversed(recent_draws)):
         if d.get('prize1_count', 0) >= 10:
             last_burst = idx
             break
@@ -1704,8 +1720,8 @@ def calculate_ml_signals(draws: List[Dict]) -> Dict:
         except:
             pass
     
-    # 5. 蓝球偏向预测
-    recent_blues = [d.get('blue', 0) for d in draws[-20:] if d.get('blue', 0) > 0]
+    # 5. 蓝球偏向预测（基于50期内数据）
+    recent_blues = [d.get('blue', 0) for d in recent_draws[-20:] if d.get('blue', 0) > 0]
     if recent_blues:
         small_count = sum(1 for b in recent_blues if b <= 8)
         if small_count >= 12:
@@ -1721,9 +1737,9 @@ def calculate_ml_signals(draws: List[Dict]) -> Dict:
         blue_bias = "均衡 ⚖️"
         blue_prob = "50%"
     
-    # 6. 红球重复预测
-    last_reds = draws[-1].get('reds', [])
-    prev_reds = draws[-2].get('reds', []) if len(draws) >= 2 else []
+    # 6. 红球重复预测（基于50期内数据）
+    last_reds = recent_draws[-1].get('reds', [])
+    prev_reds = recent_draws[-2].get('reds', []) if len(recent_draws) >= 2 else []
     repeat_count = len(set(last_reds) & set(prev_reds)) if prev_reds else 0
     repeat_hint = f"上期红球重复{repeat_count}个，历史概率60%"
     
@@ -1766,7 +1782,6 @@ def calculate_ml_signals(draws: List[Dict]) -> Dict:
         sum_suggestion = f"和值正常（偏差{sum_deviation:+d}），保持均衡"
     
     # 9. 动态注数计算
-    # 第一步：基础注数（只依赖奖池）
     if pool < 150000000:
         base_bets = 0
         base_reason = "奖池低于1.5亿"
@@ -1779,7 +1794,6 @@ def calculate_ml_signals(draws: List[Dict]) -> Dict:
     
     calculated_bets = base_bets
     
-    # 第二步：信号修正
     if "HIGH_ALERT" in scissors:
         calculated_bets += 2
         scissors_hint = "剪刀差预警+2"
@@ -1795,10 +1809,8 @@ def calculate_ml_signals(draws: List[Dict]) -> Dict:
     else:
         cycle_hint = ""
     
-    # 第三步：限制范围
     recommended_bets = max(0, min(calculated_bets, max_bets_by_signal))
     
-    # 第四步：生成详细原因
     reasons = [base_reason]
     if scissors_hint:
         reasons.append(scissors_hint)
@@ -1807,7 +1819,6 @@ def calculate_ml_signals(draws: List[Dict]) -> Dict:
     reasons.append(f"信号{signal_strength}分{max_bets_by_signal}组上限")
     reason_text = " → ".join(reasons)
     
-    # 根据最终推荐组数修正 action_text
     if recommended_bets == 0:
         action_text = "❌ 建议本期不买"
         action_color = "red"
@@ -2093,7 +2104,11 @@ class Method2DanTuo:
     """
     
     def __init__(self, draws: List[Dict]):
-        self.draws = draws
+        # 固定使用最近100期数据
+        if len(draws) > 100:
+            self.draws = draws[-100:]
+        else:
+            self.draws = draws
         
         # 使用新规则系统的评分计算器
         self.scorer = Method1NewRule(draws)
@@ -2331,7 +2346,11 @@ class Method3LightGBM:
     """方法3：LightGBM梯度提升树 + 规律特征"""
     
     def __init__(self, draws: List[Dict], use_cache: bool = True):
-        self.draws = draws
+        # 固定使用最近100期数据
+        if len(draws) > 100:
+            self.draws = draws[-100:]
+        else:
+            self.draws = draws
         self.use_cache = use_cache
         self.model = None
         self.is_trained = False
@@ -2663,7 +2682,11 @@ class Method4Ensemble:
     """方法4：XGBoost + 规律特征"""
     
     def __init__(self, draws: List[Dict], use_cache: bool = True):
-        self.draws = draws
+        # 固定使用最近120期数据
+        if len(draws) > 120:
+            self.draws = draws[-120:]
+        else:
+            self.draws = draws
         self.use_cache = use_cache
         self.xgb_model = None
         self.is_trained = False
@@ -3070,9 +3093,15 @@ class Method1NewRule:
     新规则系统 v15.0
     核心特性：单号码评分 + 分池 + 动态降级 + 正弦拟合和值 + 后置筛选
     """
-    
+    #--------------------
     def __init__(self, draws: List[Dict]):
-        self.draws = draws
+        # ========== 固定使用最近100期数据 ==========
+        # 蓝球疏密周期需要6-7个周期（16期×6.25=100期）
+        if len(draws) > 100:
+            self.draws = draws[-100:]
+        else:
+            self.draws = draws
+        
         self.red_scores = None
         self.normal_pool = None
         self.cold_pool = None
@@ -3415,7 +3444,11 @@ class BlueScoreSystem:
     """
     
     def __init__(self, draws: List[Dict]):
-        self.draws = draws
+        # 固定使用最近100期数据
+        if len(draws) > 100:
+            self.draws = draws[-100:]
+        else:
+            self.draws = draws
         
         # 可调节参数（支持外部修改）
         self.temperature = 0.8           # Softmax温度
@@ -4219,10 +4252,12 @@ with col2:
 
 st.markdown("---")
 
+#-------------
 # ==================== ML智能分析 ====================
 st.subheader("🧠 ML智能分析引擎")
 
-ml_signals = calculate_ml_signals(draws)
+# 修改：使用固定50期窗口的独立版ML引擎
+ml_signals = calculate_ml_signals_fixed_window(draws)
 next_period = get_next_period(draws)
 
 col1, col2, col3, col4 = st.columns(4)
