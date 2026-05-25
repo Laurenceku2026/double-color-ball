@@ -4568,12 +4568,7 @@ with st.expander("📈 ROI回测分析"):
         "选择种子模式",
         options=["日期+21:15（每期用自己的开奖日期）", "用户输入固定种子", "机器自动产生（每期随机）"],
         index=0,
-        key="seed_mode_radio",
-        help="""
-        - 日期+21:15：每期使用自己的开奖日期+21:15作为种子（可重现，模拟真实场景）
-        - 用户输入固定种子：整个回测使用同一个固定种子值（用于比较不同种子效果）
-        - 机器自动产生：每期随机生成种子（模拟完全随机情况）
-        """
+        key="seed_mode_radio"
     )
     
     fixed_seed_value = 1
@@ -4584,8 +4579,7 @@ with st.expander("📈 ROI回测分析"):
             max_value=10000,
             value=7,
             step=1,
-            key="fixed_seed_value",
-            help="建议尝试: 1, 3, 5, 7, 9, 10, 11"
+            key="fixed_seed_value"
         )
     
     # 映射到函数参数
@@ -4610,7 +4604,7 @@ with st.expander("📈 ROI回测分析"):
             with st.spinner(f"正在回测 {backtest_periods} 期，请稍候..."):
                 results_data = []
                 
-                # 方法1：新规则系统
+                # ========== 方法1：新规则系统 v15.0 ==========
                 result = backtest_roi(
                     draws, "方法1", backtest_bets, backtest_periods,
                     seed_mode=seed_mode, fixed_seed_value=fixed_seed_value
@@ -4624,7 +4618,7 @@ with st.expander("📈 ROI回测分析"):
                     "中奖率": float(result.get('win_rate', 0))
                 })
                 
-                # 方法2：胆拖混合
+                # ========== 方法2：胆拖混合 ==========
                 result = backtest_roi(
                     draws, "方法2", backtest_bets, backtest_periods,
                     seed_mode=seed_mode, fixed_seed_value=fixed_seed_value
@@ -4638,7 +4632,7 @@ with st.expander("📈 ROI回测分析"):
                     "中奖率": float(result.get('win_rate', 0))
                 })
                 
-                # 方法3：LightGBM
+                # ========== 方法3：LightGBM ==========
                 result = backtest_roi(
                     draws, "方法3", backtest_bets, backtest_periods,
                     seed_mode=seed_mode, fixed_seed_value=fixed_seed_value
@@ -4652,13 +4646,27 @@ with st.expander("📈 ROI回测分析"):
                     "中奖率": float(result.get('win_rate', 0))
                 })
                 
-                # 方法4：XGBoost
+                # ========== 方法4：XGBoost ==========
                 result = backtest_roi(
                     draws, "方法4", backtest_bets, backtest_periods,
                     seed_mode=seed_mode, fixed_seed_value=fixed_seed_value
                 )
                 results_data.append({
                     "方法": "方法4:XGBoost",
+                    "ROI": float(result.get('roi', 0)),
+                    "总成本": int(result.get('total_cost', 0)),
+                    "总奖金": int(result.get('total_prize', 0)),
+                    "净收益": int(result.get('net', 0)),
+                    "中奖率": float(result.get('win_rate', 0))
+                })
+                
+                # ========== 方法5：综合模式（新增） ==========
+                result = backtest_roi(
+                    draws, "方法5", backtest_bets, backtest_periods,
+                    seed_mode=seed_mode, fixed_seed_value=fixed_seed_value
+                )
+                results_data.append({
+                    "方法": "方法5:综合模式",
                     "ROI": float(result.get('roi', 0)),
                     "总成本": int(result.get('total_cost', 0)),
                     "总奖金": int(result.get('total_prize', 0)),
@@ -4680,6 +4688,7 @@ with st.expander("📈 ROI回测分析"):
                     hide_index=True
                 )
                 
+                # 找出最佳表现的方法
                 best_method = results_data[0]["方法"]
                 best_roi = results_data[0]["ROI"]
                 for r in results_data:
