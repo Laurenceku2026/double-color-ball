@@ -4257,7 +4257,7 @@ st.markdown("---")
 st.subheader("🧠 ML智能分析引擎")
 
 # 修改：使用固定50期窗口的独立版ML引擎
-ml_signals = calculate_ml_signals_fixed_window(draws)
+ml_signals = calculate_ml_signals(draws)
 next_period = get_next_period(draws)
 
 col1, col2, col3, col4 = st.columns(4)
