@@ -3675,26 +3675,23 @@ class BetGenerator:
 # 修改：方法1改为使用 Method1NewRule（新规则系统）
 # ============================================================
 
-def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookback: int = 10, 
+def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookback: int = 10,
                  seed_mode: str = "date", fixed_seed_value: int = 1) -> Dict:
     """
     优化版ROI回测 - 支持3种种子模式
-    修改：方法1使用 Method1NewRule（新规则系统 v15.0）
-    
-    参数:
-        method_name: "方法1", "方法2", "方法3", "方法4"
-        seed_mode: "date" | "fixed" | "random"
-        fixed_seed_value: 当 seed_mode="fixed" 时使用的种子值
+    修改：方法5直接复用方法1-4的投注结果
     """
     method_seed_offset = {
         "方法1": 100,
         "方法2": 200,
         "方法3": 300,
-        "方法4": 400
+        "方法4": 400,
+        "方法5": 500
     }.get(method_name, 0)
     
-    # 获取训练窗口（与原版一致）
     train_window = TRAIN_WINDOWS.get(method_name, 100)
+    if method_name == "方法5":
+        train_window = max(TRAIN_WINDOWS.values())  # 方法5使用最大窗口
     
     if len(draws) < train_window + lookback:
         return {
@@ -3730,20 +3727,16 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
                             date_obj = datetime.now()
                     else:
                         date_obj = test_date
-                    
                     seed_val = int(datetime(date_obj.year, date_obj.month, date_obj.day, 21, 15).timestamp())
                     seed_val += method_seed_offset
                 except Exception:
                     seed_val = 42 + method_seed_offset + i
             else:
                 seed_val = 42 + method_seed_offset + i
-                
         elif seed_mode == "fixed":
             seed_val = fixed_seed_value + method_seed_offset
-            
         elif seed_mode == "random":
             seed_val = random.randint(0, 1000000) + method_seed_offset
-            
         else:
             seed_val = 42 + method_seed_offset + i
         
@@ -3756,45 +3749,104 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
         if model_key not in trained_models:
             train_data = draws[i - train_window:i]
             
-            # ========== 根据方法名调用对应的生成器 ==========
             if method_name == "方法1":
-                # 修改：使用新规则系统 v15.0
                 generator = Method1NewRule(train_data)
                 bets = generator.generate_bets(num_bets, "7+1")
-                
-                # 使用新蓝球系统
                 blue_system = BlueScoreSystem(train_data)
                 for bet in bets:
                     blue = blue_system.select_blue()
                     bet['blues'] = [blue]
                     bet['blue'] = blue
+                trained_models[model_key] = bets
             
             elif method_name == "方法2":
-                # 使用新实现的胆拖混合
                 generator = Method2DanTuo(train_data)
                 bets = generator.generate_bets(num_bets, "7+1")
-                
-                # 使用新蓝球系统
                 blue_system = BlueScoreSystem(train_data)
                 for bet in bets:
                     blue = blue_system.select_blue()
                     bet['blues'] = [blue]
                     bet['blue'] = blue
+                trained_models[model_key] = bets
             
             elif method_name == "方法3":
                 generator = Method3LightGBM(train_data)
                 generator.train()
                 bets = generator.generate_bets(num_bets, "7+1")
-                # 方法3内部已有蓝球逻辑
+                trained_models[model_key] = bets
             
             elif method_name == "方法4":
                 generator = Method4Ensemble(train_data)
                 generator.train()
                 bets = generator.generate_bets(num_bets, "7+1")
-                # 方法4内部已有蓝球逻辑
+                trained_models[model_key] = bets
+            
+            elif method_name == "方法5":
+                # ========== 方法5：复用方法1-4的结果 ==========
+                # 先生成方法1-4的投注（如果还没有缓存）
+                methods_results = {}
+                for m in ["方法1", "方法2", "方法3", "方法4"]:
+                    m_key = f"{m}_{i // retrain_interval}"
+                    if m_key not in trained_models:
+                        # 临时生成该方法的结果（使用相同的训练数据）
+                        if m == "方法1":
+                            g = Method1NewRule(train_data)
+                            b = g.generate_bets(num_bets, "7+1")
+                            bs = BlueScoreSystem(train_data)
+                            for bet in b:
+                                blue = bs.select_blue()
+                                bet['blues'] = [blue]
+                                bet['blue'] = blue
+                            trained_models[m_key] = b
+                        elif m == "方法2":
+                            g = Method2DanTuo(train_data)
+                            b = g.generate_bets(num_bets, "7+1")
+                            bs = BlueScoreSystem(train_data)
+                            for bet in b:
+                                blue = bs.select_blue()
+                                bet['blues'] = [blue]
+                                bet['blue'] = blue
+                            trained_models[m_key] = b
+                        elif m == "方法3":
+                            g = Method3LightGBM(train_data)
+                            g.train()
+                            b = g.generate_bets(num_bets, "7+1")
+                            trained_models[m_key] = b
+                        elif m == "方法4":
+                            g = Method4Ensemble(train_data)
+                            g.train()
+                            b = g.generate_bets(num_bets, "7+1")
+                            trained_models[m_key] = b
+                    methods_results[m] = trained_models[m_key]
+                
+                # 合并所有投注，统计频率
+                all_reds = []
+                all_blues = []
+                for m in ["方法1", "方法2", "方法3", "方法4"]:
+                    for bet in methods_results[m]:
+                        all_reds.extend(bet['reds'])
+                        all_blues.extend(bet.get('blues', [bet['blue']]))
+                
+                from collections import Counter
+                red_counter = Counter(all_reds)
+                blue_counter = Counter(all_blues)
+                
+                # 取频率最高的7红+2蓝
+                top_reds = [num for num, _ in red_counter.most_common(7)]
+                top_reds.sort()
+                top_blues = [num for num, _ in blue_counter.most_common(2)]
+                
+                bets = [{
+                    'reds': top_reds,
+                    'blues': top_blues,
+                    'blue': top_blues[0],
+                    'sum': sum(top_reds),
+                    'method': '方法5:综合模式'
+                }]
+                trained_models[model_key] = bets
             
             else:
-                # 默认使用新规则系统
+                # 默认使用方法1
                 generator = Method1NewRule(train_data)
                 bets = generator.generate_bets(num_bets, "7+1")
                 blue_system = BlueScoreSystem(train_data)
@@ -3802,13 +3854,12 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
                     blue = blue_system.select_blue()
                     bet['blues'] = [blue]
                     bet['blue'] = blue
-            
-            trained_models[model_key] = bets
+                trained_models[model_key] = bets
         else:
             bets = trained_models[model_key]
         
+        # 计算中奖
         period_prize = 0
-        
         for bet in bets:
             prize, level = calculate_prize_for_single_bet(bet, test_data)
             period_prize += prize
