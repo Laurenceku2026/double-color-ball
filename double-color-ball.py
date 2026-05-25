@@ -2072,350 +2072,261 @@ def calculate_prize_for_single_bet(bet: Dict, actual: Dict) -> Tuple[int, str]:
     return total_prize, best_level
 
 
-# ==================== 方法1：冷热码评分 + 和值动态预测 ====================
-class Method1HotColdSum:
-    """方法1：冷热码评分 + 和值动态预测 + 规律加成"""
-    
-    def __init__(self, draws: List[Dict]):
-        self.draws = draws
-        self.red_freq = self._calculate_frequency('reds')
-        self.blue_freq = self._calculate_frequency('blue')
-        self.red_absence = self._calculate_absence('reds')
-        self.blue_absence = self._calculate_absence('blue')
-    
-    def _calculate_frequency(self, field: str) -> Dict[int, float]:
-        freq = {i: 0 for i in range(1, 34 if field == 'reds' else 17)}
-        total = 0
-        
-        for draw in self.draws:
-            if field == 'reds':
-                for num in draw.get('reds', []):
-                    if 1 <= num <= 33:
-                        freq[num] += 1
-                        total += 1
-            else:
-                blue = draw.get('blue', 0)
-                if 1 <= blue <= 16:
-                    freq[blue] += 1
-                    total += 1
-        
-        max_freq = max(freq.values()) if freq.values() else 1
-        for num in freq:
-            freq[num] = freq[num] / max_freq if max_freq > 0 else 0
-        
-        return freq
-    
-    def _calculate_absence(self, field: str) -> Dict[int, int]:
-        absence = {i: 0 for i in range(1, 34 if field == 'reds' else 17)}
-        last_seen = {i: None for i in range(1, 34 if field == 'reds' else 17)}
-        
-        for idx, draw in enumerate(reversed(self.draws)):
-            if field == 'reds':
-                for num in draw.get('reds', []):
-                    if 1 <= num <= 33 and last_seen[num] is None:
-                        last_seen[num] = idx
-            else:
-                blue = draw.get('blue', 0)
-                if 1 <= blue <= 16 and last_seen[blue] is None:
-                    last_seen[blue] = idx
-        
-        total = len(self.draws)
-        for num in absence:
-            absence[num] = last_seen[num] if last_seen[num] is not None else total
-        
-        return absence
-    
-    def calculate_red_scores(self) -> Dict[int, float]:
-        """计算红球分数（基础分数 × 规律加成）"""
-        max_absence = max(self.red_absence.values()) if self.red_absence.values() else 1
-        
-        base_scores = {}
-        for num in RED_NUMBERS:
-            freq_score = self.red_freq.get(num, 0)
-            absence_score = 1 - (self.red_absence.get(num, max_absence) / max_absence) if max_absence > 0 else 0
-            base_scores[num] = 0.5 * freq_score + 0.5 * absence_score
-        
-        last_reds = self.draws[-1].get('reds', []) if self.draws else []
-        
-        final_scores = {}
-        for num in RED_NUMBERS:
-            base = max(base_scores.get(num, 0.5), 0.3)
-            boost = calculate_pattern_boost(num, last_reds)
-            final_scores[num] = base * boost
-        
-        return final_scores
-    
-    def calculate_blue_scores(self) -> Dict[int, float]:
-        max_absence = max(self.blue_absence.values()) if self.blue_absence.values() else 1
-        scores = {}
-        for num in BLUE_NUMBERS:
-            freq_score = self.blue_freq.get(num, 0)
-            absence_score = 1 - (self.blue_absence.get(num, max_absence) / max_absence) if max_absence > 0 else 0
-            scores[num] = 0.5 * freq_score + 0.5 * absence_score
-        return scores
-    
-    def get_target_sum(self) -> Tuple[int, int]:
-        return get_target_sum(self.draws)
-    
-    def get_top_reds_by_score(self, n: int = 10) -> List[int]:
-        red_scores = self.calculate_red_scores()
-        sorted_reds = sorted(red_scores.items(), key=lambda x: x[1], reverse=True)
-        return [num for num, _ in sorted_reds[:n]]
-    
-    def get_top_blues_by_score(self, n: int = 3) -> List[int]:
-        blue_scores = self.calculate_blue_scores()
-        sorted_blues = sorted(blue_scores.items(), key=lambda x: x[1], reverse=True)
-        return [num for num, _ in sorted_blues[:n]]
-    
-    def generate_bets(self, num_bets: int = 4, bet_type: str = "7+1") -> List[Dict]:
-        red_scores = self.calculate_red_scores()
-        blue_scores = self.calculate_blue_scores()
-        
-        red_weights = np.array([math.exp(red_scores.get(i, 0)) for i in RED_NUMBERS])
-        blue_weights = np.array([math.exp(blue_scores.get(i, 0)) for i in BLUE_NUMBERS])
-        
-        if np.sum(red_weights) > 0:
-            red_weights = red_weights / np.sum(red_weights)
-        else:
-            red_weights = np.ones(33) / 33
-        
-        if np.sum(blue_weights) > 0:
-            blue_weights = blue_weights / np.sum(blue_weights)
-        else:
-            blue_weights = np.ones(16) / 16
-        
-        target_sum, tolerance = self.get_target_sum()
-        
-        red_count = 7 if bet_type.startswith("7") else 8
-        blue_count = 2 if bet_type == "7+2" else 1
-        
-        top_reds = self.get_top_reds_by_score(12)
-        top_blues = self.get_top_blues_by_score(3)
-        
-        bets = []
-        for bet_idx in range(num_bets):
-            core_reds = None
-            for attempt in range(100):
-                reds = np.random.choice(RED_NUMBERS, size=6, replace=False, p=red_weights)
-                reds = sorted(reds.tolist())
-                if abs(sum(reds) - target_sum) <= tolerance:
-                    core_reds = reds
-                    break
-            if core_reds is None:
-                core_reds = sorted(np.random.choice(RED_NUMBERS, size=6, replace=False))
-            
-            final_reds = list(core_reds)
-            if red_count > 6:
-                candidates = [r for r in top_reds if r not in final_reds]
-                if len(candidates) < (red_count - 6):
-                    candidates = [r for r in RED_NUMBERS if r not in final_reds]
-                
-                needed = red_count - 6
-                selected = []
-                for candidate in candidates:
-                    zones_covered = set()
-                    for r in final_reds:
-                        for zid, zone in ZONES.items():
-                            if r in zone['numbers']:
-                                zones_covered.add(zid)
-                                break
-                    candidate_zone = None
-                    for zid, zone in ZONES.items():
-                        if candidate in zone['numbers']:
-                            candidate_zone = zid
-                            break
-                    if candidate_zone not in zones_covered and len(selected) < needed:
-                        selected.append(candidate)
-                
-                for candidate in candidates:
-                    if candidate not in selected and len(selected) < needed:
-                        selected.append(candidate)
-                
-                final_reds.extend(selected[:needed])
-                final_reds = sorted(final_reds)
-            
-            blues = []
-            if blue_count == 1:
-                blue = np.random.choice(BLUE_NUMBERS, p=blue_weights)
-                blues.append(int(blue))
-            else:
-                primary_blue = np.random.choice(BLUE_NUMBERS, p=blue_weights)
-                blues.append(int(primary_blue))
-                secondary_candidates = [b for b in top_blues if b != primary_blue]
-                if secondary_candidates:
-                    secondary_blue = np.random.choice(secondary_candidates)
-                else:
-                    secondary_blue = np.random.choice([b for b in BLUE_NUMBERS if b != primary_blue])
-                blues.append(secondary_blue)
-            
-            bets.append({
-                'reds': final_reds,
-                'blues': blues,
-                'blue': blues[0],
-                'sum': sum(final_reds),
-                'method': '方法1:冷热码+和值+规律',
-                'bet_type': bet_type
-            })
-        
-        return bets
+# ==================== 原方法1：冷热码评分 + 和值动态预测 ====================
 
+# ============================================================
+# 方法2：胆拖混合（基于新系统评分的简化版）
+# 胆码 = 评分Top5中随机抽2个
+# 剩余4个 = 其余28个中按Softmax抽取
+# ============================================================
 
-# ==================== 方法2：胆拖混合 ====================
 class Method2DanTuo:
-    """方法2：胆拖混合 - 基于上期热号作为胆码 + 规律加成"""
+    """
+    方法2：胆拖混合（新实现 v15.0）
+    
+    核心逻辑：
+    1. 使用新规则系统的评分
+    2. 胆码从评分Top5中随机抽取2个
+    3. 剩余4个从其余28个中按Softmax概率抽取
+    4. 使用正弦拟合和值筛选
+    5. 动态降级策略（5+1 → 4+2 → 保底）
+    """
     
     def __init__(self, draws: List[Dict]):
         self.draws = draws
-        self.method1 = Method1HotColdSum(draws)
+        
+        # 使用新规则系统的评分计算器
+        self.scorer = Method1NewRule(draws)
+        
+        # 可调节参数（支持外部修改）
+        self.normal_threshold = 50          # 正常池阈值（用于参考）
+        self.temp_normal = 0.8              # 正常池温度
+        self.sum_tolerance = 12             # 和值容差
+        self.require_consecutive = True     # 是否需要连号
+        self.max_attempts = 500             # 最大尝试次数
+        
+        # 从scorer获取评分和池子
+        self.red_scores = self.scorer.red_scores
+        self.normal_pool = self.scorer.normal_pool
+        self.cold_pool = self.scorer.cold_pool
     
-    def select_anchors(self, num_anchors: int = 2) -> List[int]:
-        red_scores = self.method1.calculate_red_scores()
-        
-        if self.draws:
-            last_reds = self.draws[-1].get('reds', [])
-            for num in last_reds:
-                if num in red_scores:
-                    red_scores[num] += 0.2
-        
-        zone_heat = get_zone_heat(self.draws, 50)
-        for zone_id, zone_info in zone_heat.items():
-            if '🔥' in zone_info['heat_level']:
-                for num in ZONES[zone_id]['numbers']:
-                    if num in red_scores:
-                        red_scores[num] += 0.15
-        
-        recent_counts = {}
-        for draw in self.draws[-20:]:
-            for num in draw.get('reds', []):
-                recent_counts[num] = recent_counts.get(num, 0) + 1
-        for num, count in recent_counts.items():
-            if count >= 3 and num in red_scores:
-                red_scores[num] += 0.1
-        
-        sorted_nums = sorted(red_scores.items(), key=lambda x: x[1], reverse=True)
-        return [num for num, _ in sorted_nums[:num_anchors]]
+    def _softmax_select(self, pool: List[int], scores: Dict[int, int], temperature: float) -> int:
+        """Softmax概率抽取"""
+        if not pool:
+            return None
+        score_list = [scores[num] for num in pool]
+        exp_scores = np.exp(np.array(score_list) / temperature)
+        probs = exp_scores / np.sum(exp_scores)
+        return np.random.choice(pool, p=probs)
     
-    def get_top_reds_for_expansion(self, n: int = 12) -> List[int]:
-        red_scores = self.method1.calculate_red_scores()
-        sorted_reds = sorted(red_scores.items(), key=lambda x: x[1], reverse=True)
-        return [num for num, _ in sorted_reds[:n]]
+    def _get_top_n_by_score(self, n: int) -> List[int]:
+        """获取评分最高的N个号码"""
+        sorted_nums = sorted(self.red_scores.items(), key=lambda x: x[1], reverse=True)
+        return [num for num, _ in sorted_nums[:n]]
+    
+    def _get_target_sum(self) -> Tuple[int, int]:
+        """正弦拟合预测和值（复用Method1NewRule的方法）"""
+        return self.scorer._get_target_sum()
+    
+    def _has_consecutive(self, reds: List[int]) -> bool:
+        """检查是否有连号"""
+        for i in range(1, len(reds)):
+            if reds[i] - reds[i-1] == 1:
+                return True
+        return False
+    
+    def _is_valid(self, reds: List[int], target_sum: int) -> bool:
+        """后置筛选：和值 + 连号"""
+        total = sum(reds)
+        if abs(total - target_sum) > self.sum_tolerance:
+            return False
+        if self.require_consecutive and not self._has_consecutive(reds):
+            return False
+        return True
+    
+    def _expand_to_7(self, reds_6: List[int]) -> List[int]:
+        """将6个红球扩展为7个（从正常池补充）"""
+        candidates = [n for n in self.normal_pool if n not in reds_6]
+        if not candidates:
+            candidates = [n for n in RED_NUMBERS if n not in reds_6]
+        if candidates:
+            extra = self._softmax_select(candidates, self.red_scores, self.temp_normal)
+            if extra is not None:
+                return sorted(reds_6 + [extra])
+        return sorted(reds_6 + [np.random.choice([n for n in RED_NUMBERS if n not in reds_6])])
+    
+    def _sample_with_dantuo(self, normal_count: int, cold_count: int) -> List[int]:
+        """
+        胆拖混合抽样
+        胆码：从评分Top5中随机抽2个
+        剩余：从其余号码中按Softmax抽 normal_count + cold_count - 2 个
+        """
+        # 1. 获取评分Top5作为胆码候选池
+        top5 = self._get_top_n_by_score(5)
+        if len(top5) < 2:
+            # 数据不足，降级到普通分层抽样
+            return self._sample_stratified(normal_count, cold_count)
+        
+        # 2. 随机抽取2个胆码
+        anchors = np.random.choice(top5, size=2, replace=False).tolist()
+        
+        # 3. 剩余号码池（排除胆码）
+        remaining_pool = [n for n in RED_NUMBERS if n not in anchors]
+        
+        # 4. 需要抽取的数量
+        needed = normal_count + cold_count - 2
+        
+        if needed <= 0 or len(remaining_pool) < needed:
+            return None
+        
+        # 5. 按Softmax从剩余池中抽取
+        selected = anchors.copy()
+        temp_pool = remaining_pool.copy()
+        
+        for _ in range(needed):
+            if not temp_pool:
+                break
+            # 根据号码所在池子选择温度
+            num = temp_pool[0]
+            if self.red_scores.get(num, 0) >= self.normal_threshold:
+                temp = 0.8
+            else:
+                temp = 1.2
+            num = self._softmax_select(temp_pool, self.red_scores, temp)
+            if num is not None:
+                selected.append(num)
+                temp_pool.remove(num)
+        
+        selected = list(set(selected))
+        if len(selected) < 6:
+            return None
+        
+        return sorted(selected[:6])
+    
+    def _sample_stratified(self, normal_count: int, cold_count: int) -> List[int]:
+        """
+        分层抽样（降级备用）
+        正常池和冷码池分别抽取
+        """
+        selected = []
+        
+        # 从正常池抽取
+        temp_normal = self.normal_pool.copy()
+        for _ in range(min(normal_count, len(temp_normal))):
+            if not temp_normal:
+                break
+            num = self._softmax_select(temp_normal, self.red_scores, 0.8)
+            if num is not None:
+                selected.append(num)
+                temp_normal.remove(num)
+        
+        # 从冷码池抽取
+        temp_cold = self.cold_pool.copy()
+        for _ in range(min(cold_count, len(temp_cold))):
+            if not temp_cold:
+                break
+            num = self._softmax_select(temp_cold, self.red_scores, 1.2)
+            if num is not None:
+                selected.append(num)
+                temp_cold.remove(num)
+        
+        selected = list(set(selected))
+        if len(selected) < 6:
+            return None
+        return sorted(selected[:6])
     
     def generate_bets(self, num_bets: int = 4, bet_type: str = "7+1") -> List[Dict]:
-        anchors = self.select_anchors(num_anchors=2)
-        red_scores = self.method1.calculate_red_scores()
-        blue_scores = self.method1.calculate_blue_scores()
-        
-        for a in anchors:
-            if a in red_scores:
-                red_scores[a] = 0.1
-        
-        red_weights = np.array([math.exp(red_scores.get(i, 0)) for i in RED_NUMBERS])
-        blue_weights = np.array([math.exp(blue_scores.get(i, 0)) for i in BLUE_NUMBERS])
-        
-        if np.sum(red_weights) > 0:
-            red_weights = red_weights / np.sum(red_weights)
-        else:
-            red_weights = np.ones(33) / 33
-        
-        if np.sum(blue_weights) > 0:
-            blue_weights = blue_weights / np.sum(blue_weights)
-        else:
-            blue_weights = np.ones(16) / 16
-        
-        target_sum, tolerance = self.method1.get_target_sum()
-        
-        red_count = 7 if bet_type.startswith("7") else 8
-        blue_count = 2 if bet_type == "7+2" else 1
-        
-        top_reds = self.get_top_reds_for_expansion(12)
-        top_blues = self.method1.get_top_blues_by_score(3)
-        
+        """
+        生成投注（核心方法）
+        动态降级策略：5+1 → 4+2 → 保底
+        """
+        target_sum, _ = self._get_target_sum()
         bets = []
-        for bet_idx in range(num_bets):
-            needed = 6 - len(anchors)
-            core_reds = anchors.copy()
+        
+        for _ in range(num_bets):
+            success = False
             
-            for attempt in range(100):
-                candidates = [i for i in RED_NUMBERS if i not in anchors]
-                if not candidates:
+            # ========== 第1层：5+1（胆拖模式） ==========
+            for _ in range(self.max_attempts):
+                selected = self._sample_with_dantuo(5, 1)
+                if selected and self._is_valid(selected, target_sum):
+                    final_reds = self._expand_to_7(selected)
+                    bets.append({
+                        'reds': final_reds,
+                        'blues': [8],  # 蓝球暂用默认值
+                        'blue': 8,
+                        'sum': sum(final_reds),
+                        'method': '方法2:胆拖混合(5+1)'
+                    })
+                    success = True
                     break
-                candidate_weights = np.array([red_weights[i-1] for i in candidates])
-                if np.sum(candidate_weights) > 0:
-                    candidate_weights = candidate_weights / np.sum(candidate_weights)
-                else:
-                    candidate_weights = np.ones(len(candidates)) / len(candidates)
-                selected = np.random.choice(candidates, size=needed, replace=False, p=candidate_weights)
-                temp_reds = sorted(anchors + selected.tolist())
-                if abs(sum(temp_reds) - target_sum) <= tolerance:
-                    core_reds = temp_reds
+            
+            if success:
+                continue
+            
+            # ========== 第2层：4+2（放宽容差） ==========
+            original_tolerance = self.sum_tolerance
+            self.sum_tolerance = min(20, int(original_tolerance * 1.5))
+            
+            for _ in range(self.max_attempts // 2):
+                selected = self._sample_with_dantuo(4, 2)
+                if selected and self._is_valid(selected, target_sum):
+                    final_reds = self._expand_to_7(selected)
+                    bets.append({
+                        'reds': final_reds,
+                        'blues': [8],
+                        'blue': 8,
+                        'sum': sum(final_reds),
+                        'method': '方法2:胆拖混合(4+2放宽和值)'
+                    })
+                    success = True
                     break
-            else:
-                candidates = [i for i in RED_NUMBERS if i not in anchors]
-                if len(candidates) >= needed:
-                    selected = np.random.choice(candidates, size=needed, replace=False)
-                else:
-                    selected = []
-                core_reds = sorted(anchors + selected.tolist())[:6]
             
-            final_reds = list(core_reds)
-            if red_count > 6:
-                candidates = [r for r in top_reds if r not in final_reds]
-                if len(candidates) < (red_count - 6):
-                    candidates = [r for r in RED_NUMBERS if r not in final_reds]
-                
-                needed_extras = red_count - 6
-                selected_extras = []
-                for candidate in candidates:
-                    if len(selected_extras) >= needed_extras:
-                        break
-                    zones_covered = set()
-                    for r in final_reds:
-                        for zid, zone in ZONES.items():
-                            if r in zone['numbers']:
-                                zones_covered.add(zid)
-                                break
-                    candidate_zone = None
-                    for zid, zone in ZONES.items():
-                        if candidate in zone['numbers']:
-                            candidate_zone = zid
-                            break
-                    if candidate_zone not in zones_covered:
-                        selected_extras.append(candidate)
-                
-                for candidate in candidates:
-                    if candidate not in selected_extras and len(selected_extras) < needed_extras:
-                        selected_extras.append(candidate)
-                
-                final_reds.extend(selected_extras[:needed_extras])
-                final_reds = sorted(final_reds)
+            self.sum_tolerance = original_tolerance
             
-            blues = []
-            if blue_count == 1:
-                blue = np.random.choice(BLUE_NUMBERS, p=blue_weights)
-                blues.append(int(blue))
-            else:
-                primary_blue = np.random.choice(BLUE_NUMBERS, p=blue_weights)
-                blues.append(int(primary_blue))
-                secondary_candidates = [b for b in top_blues if b != primary_blue]
-                if secondary_candidates:
-                    secondary_blue = np.random.choice(secondary_candidates)
-                else:
-                    secondary_blue = np.random.choice([b for b in BLUE_NUMBERS if b != primary_blue])
-                blues.append(secondary_blue)
+            if success:
+                continue
             
+            # ========== 第3层：放弃和值，只保留连号 ==========
+            for _ in range(self.max_attempts // 2):
+                selected = self._sample_with_dantuo(4, 2)
+                if selected and self._has_consecutive(selected):
+                    final_reds = self._expand_to_7(selected)
+                    bets.append({
+                        'reds': final_reds,
+                        'blues': [8],
+                        'blue': 8,
+                        'sum': sum(final_reds),
+                        'method': '方法2:胆拖混合(仅连号)'
+                    })
+                    success = True
+                    break
+            
+            if success:
+                continue
+            
+            # ========== 第4层：保底随机 ==========
+            selected = sorted(np.random.choice(RED_NUMBERS, size=6, replace=False))
+            final_reds = self._expand_to_7(selected)
             bets.append({
                 'reds': final_reds,
-                'blues': blues,
-                'blue': blues[0],
+                'blues': [8],
+                'blue': 8,
                 'sum': sum(final_reds),
-                'method': f'方法2:胆拖混合 (胆码:{anchors})',
-                'bet_type': bet_type
+                'method': '方法2:胆拖混合(保底)'
             })
         
         return bets
 
+#-------
+# ============================================================
+# 方法3：LightGBM（完整版）
+# 修改内容：
+# 1. 降级逻辑改为降级到方法2（新实现）
+# 2. 蓝球评分改用新系统
+# 3. 其他ML训练和预测逻辑保持不变
+# ============================================================
 
-# ==================== 方法3：LightGBM ====================
 class Method3LightGBM:
     """方法3：LightGBM梯度提升树 + 规律特征"""
     
@@ -2426,15 +2337,18 @@ class Method3LightGBM:
         self.is_trained = False
     
     def _extract_features(self, window_draws: List[Dict], target_num: int) -> Optional[Dict]:
+        """提取特征（与原版相同）"""
         if len(window_draws) < 20:
             return None
         
         features = {}
         total = len(window_draws)
         
+        # 频率特征
         freq = sum(1 for d in window_draws if target_num in d.get('reds', []))
         features['freq'] = freq / total if total > 0 else 0
         
+        # 遗漏特征
         last_seen = None
         for idx, d in enumerate(reversed(window_draws)):
             if target_num in d.get('reds', []):
@@ -2442,19 +2356,23 @@ class Method3LightGBM:
                 break
         features['absence'] = last_seen if last_seen is not None else total
         
+        # 近期频率
         recent_10 = window_draws[-10:] if len(window_draws) >= 10 else window_draws
         recent_20 = window_draws[-20:] if len(window_draws) >= 20 else window_draws
         features['recent_freq_10'] = sum(1 for d in recent_10 if target_num in d.get('reds', [])) / max(len(recent_10), 1)
         features['recent_freq_20'] = sum(1 for d in recent_20 if target_num in d.get('reds', [])) / max(len(recent_20), 1)
         
+        # 上期出现
         if window_draws:
             features['last_appeared'] = 1 if target_num in window_draws[-1].get('reds', []) else 0
         
+        # 分区、奇偶、大小
         zone = (target_num - 1) // 11 + 1
         features['zone'] = zone
         features['parity'] = target_num % 2
         features['size'] = 0 if target_num <= 16 else 1
         
+        # 规律特征
         last_draw = window_draws[-1] if window_draws else {}
         last_reds = last_draw.get('reds', [])
         
@@ -2465,6 +2383,7 @@ class Method3LightGBM:
             features['is_edge'] = 1 if min_edge_dist == 1 else 0
             features['min_edge_distance'] = min_edge_dist
             
+            # 夹号特征
             is_gap = 0
             gap_width = 0
             for i in range(len(last_reds_sorted) - 1):
@@ -2476,20 +2395,47 @@ class Method3LightGBM:
             features['is_gap'] = is_gap
             features['gap_width'] = gap_width
             
+            # 连号特征
             test_reds = sorted(set(last_reds_sorted) | {target_num})
-            features['consecutive_length'] = calculate_consecutive_length(test_reds, target_num)
+            features['consecutive_length'] = self._calculate_consecutive_length(test_reds, target_num)
+            
+            # 对称号
             symmetric = 34 - target_num
             features['symmetric_in_last'] = 1 if symmetric in last_reds else 0
+            
+            # 蓝球相关
             last_blue = last_draw.get('blue', 0)
             features['blue_diff'] = abs(target_num - last_blue) if last_blue > 0 else 99
             features['blue_same_parity'] = 1 if (target_num % 2) == (last_blue % 2) else 0
         
+        # 历史规律率
         features['edge_historical_rate'] = self._calc_edge_historical_rate(window_draws, target_num)
         features['gap_historical_rate'] = self._calc_gap_historical_rate(window_draws, target_num)
         
         return features
     
+    def _calculate_consecutive_length(self, reds: List[int], target_num: int) -> int:
+        """计算连号长度（与原版相同）"""
+        if target_num in reds:
+            return 0
+        
+        test_set = set(reds) | {target_num}
+        sorted_test = sorted(test_set)
+        
+        max_len = 1
+        current_len = 1
+        
+        for i in range(1, len(sorted_test)):
+            if sorted_test[i] == sorted_test[i-1] + 1:
+                current_len += 1
+                max_len = max(max_len, current_len)
+            else:
+                current_len = 1
+        
+        return max_len if max_len > 1 else 0
+    
     def _calc_edge_historical_rate(self, draws: List[Dict], target_num: int) -> float:
+        """计算边号历史开出率（与原版相同）"""
         if len(draws) < 2:
             return 0.0
         
@@ -2515,6 +2461,7 @@ class Method3LightGBM:
         return appear_next / appear_as_edge if appear_as_edge > 0 else 0
     
     def _calc_gap_historical_rate(self, draws: List[Dict], target_num: int) -> float:
+        """计算夹号历史开出率（与原版相同）"""
         if len(draws) < 2:
             return 0.0
         
@@ -2541,6 +2488,7 @@ class Method3LightGBM:
         return appear_next / appear_as_gap if appear_as_gap > 0 else 0
     
     def train(self) -> bool:
+        """训练LightGBM模型（与原版相同）"""
         if not LGB_AVAILABLE or len(self.draws) < MIN_TRAIN_DATA["方法3"]:
             return False
         
@@ -2577,6 +2525,7 @@ class Method3LightGBM:
             return False
     
     def predict_top_reds(self, n: int = 12) -> List[int]:
+        """预测Top N红球（与原版相同）"""
         if not self.is_trained or not self.model:
             return []
         
@@ -2596,20 +2545,52 @@ class Method3LightGBM:
         predictions.sort(key=lambda x: x[1], reverse=True)
         return [num for num, _ in predictions[:n]]
     
+    def _calculate_blue_scores(self) -> Dict[int, float]:
+        """计算蓝球评分（使用新系统的简化版）"""
+        # 使用新蓝球系统的评分逻辑
+        try:
+            blue_system = BlueScoreSystem(self.draws)
+            scores = {}
+            for num in range(1, 17):
+                scores[num] = blue_system.calculate_total_score(num)
+            return scores
+        except:
+            # 降级：使用频率评分
+            freq = {i: 0 for i in range(1, 17)}
+            for draw in self.draws[-100:]:
+                blue = draw.get('blue', 0)
+                if 1 <= blue <= 16:
+                    freq[blue] += 1
+            max_freq = max(freq.values()) if freq.values() else 1
+            return {num: cnt / max_freq for num, cnt in freq.items()}
+    
+    def _get_top_blues(self, n: int = 3) -> List[int]:
+        """获取评分最高的N个蓝球"""
+        blue_scores = self._calculate_blue_scores()
+        sorted_blues = sorted(blue_scores.items(), key=lambda x: x[1], reverse=True)
+        return [num for num, _ in sorted_blues[:n]]
+    
     def generate_bets(self, num_bets: int = 4, bet_type: str = "7+1") -> List[Dict]:
+        """
+        生成投注
+        修改：训练失败时降级到方法2（新实现）而非方法1
+        """
         if not self.is_trained:
             self.train()
         
         if not self.is_trained:
-            method1 = Method1HotColdSum(self.draws)
-            return method1.generate_bets(num_bets, bet_type)
+            # 降级到方法2（新实现的胆拖混合）
+            fallback = Method2DanTuo(self.draws)
+            return fallback.generate_bets(num_bets, bet_type)
         
+        # ML预测逻辑
         top_reds = self.predict_top_reds(12)
         if len(top_reds) < 6:
             top_reds = list(range(1, 34))
             random.shuffle(top_reds)
         
-        blue_scores = Method1HotColdSum(self.draws).calculate_blue_scores()
+        # 蓝球评分（使用新系统）
+        blue_scores = self._calculate_blue_scores()
         blue_weights = np.array([math.exp(blue_scores.get(i, 0)) for i in BLUE_NUMBERS])
         if np.sum(blue_weights) > 0:
             blue_weights = blue_weights / np.sum(blue_weights)
@@ -2619,14 +2600,17 @@ class Method3LightGBM:
         red_count = 7 if bet_type.startswith("7") else 8
         blue_count = 2 if bet_type == "7+2" else 1
         
-        top_blues = Method1HotColdSum(self.draws).get_top_blues_by_score(3)
+        # 获取Top蓝球（用于7+2）
+        top_blues = self._get_top_blues(3)
         
         bets = []
         for _ in range(num_bets):
+            # ML选择核心6码
             core_reds = top_reds[:6].copy()
             random.shuffle(core_reds)
             core_reds = sorted(core_reds[:6])
             
+            # 扩展为7码或8码
             final_reds = list(core_reds)
             if red_count > 6:
                 candidates = [r for r in top_reds if r not in final_reds]
@@ -2641,6 +2625,7 @@ class Method3LightGBM:
                 final_reds.extend(selected_extras)
                 final_reds = sorted(final_reds)
             
+            # 蓝球选择
             blues = []
             if blue_count == 1:
                 blue = np.random.choice(BLUE_NUMBERS, p=blue_weights)
@@ -2660,14 +2645,20 @@ class Method3LightGBM:
                 'blues': blues,
                 'blue': blues[0],
                 'sum': sum(final_reds),
-                'method': '方法3:LightGBM+规律特征',
-                'bet_type': bet_type
+                'method': '方法3:LightGBM+规律特征'
             })
         
         return bets
 
+#--------------
+# ============================================================
+# 方法4：XGBoost（完整版）
+# 修改内容：
+# 1. 降级逻辑改为降级到方法2（新实现）
+# 2. 蓝球评分改用新系统
+# 3. 其他ML训练和预测逻辑保持不变
+# ============================================================
 
-# ==================== 方法4：XGBoost ====================
 class Method4Ensemble:
     """方法4：XGBoost + 规律特征"""
     
@@ -2678,15 +2669,18 @@ class Method4Ensemble:
         self.is_trained = False
     
     def _extract_features(self, window_draws: List[Dict], target_num: int) -> Optional[Dict]:
+        """提取特征（与原版相同）"""
         if len(window_draws) < 20:
             return None
         
         features = {}
         total = len(window_draws)
         
+        # 频率特征
         freq = sum(1 for d in window_draws if target_num in d.get('reds', []))
         features['freq'] = freq / total if total > 0 else 0
         
+        # 遗漏特征
         last_seen = None
         for idx, d in enumerate(reversed(window_draws)):
             if target_num in d.get('reds', []):
@@ -2694,19 +2688,23 @@ class Method4Ensemble:
                 break
         features['absence'] = last_seen if last_seen is not None else total
         
+        # 近期频率
         recent_10 = window_draws[-10:] if len(window_draws) >= 10 else window_draws
         recent_20 = window_draws[-20:] if len(window_draws) >= 20 else window_draws
         features['recent_freq_10'] = sum(1 for d in recent_10 if target_num in d.get('reds', [])) / max(len(recent_10), 1)
         features['recent_freq_20'] = sum(1 for d in recent_20 if target_num in d.get('reds', [])) / max(len(recent_20), 1)
         
+        # 上期出现
         if window_draws:
             features['last_appeared'] = 1 if target_num in window_draws[-1].get('reds', []) else 0
         
+        # 分区、奇偶、大小
         zone = (target_num - 1) // 11 + 1
         features['zone'] = zone
         features['parity'] = target_num % 2
         features['size'] = 0 if target_num <= 16 else 1
         
+        # 规律特征
         last_draw = window_draws[-1] if window_draws else {}
         last_reds = last_draw.get('reds', [])
         
@@ -2717,6 +2715,7 @@ class Method4Ensemble:
             features['is_edge'] = 1 if min_edge_dist == 1 else 0
             features['min_edge_distance'] = min_edge_dist
             
+            # 夹号特征
             is_gap = 0
             gap_width = 0
             for i in range(len(last_reds_sorted) - 1):
@@ -2728,20 +2727,47 @@ class Method4Ensemble:
             features['is_gap'] = is_gap
             features['gap_width'] = gap_width
             
+            # 连号特征
             test_reds = sorted(set(last_reds_sorted) | {target_num})
-            features['consecutive_length'] = calculate_consecutive_length(test_reds, target_num)
+            features['consecutive_length'] = self._calculate_consecutive_length(test_reds, target_num)
+            
+            # 对称号
             symmetric = 34 - target_num
             features['symmetric_in_last'] = 1 if symmetric in last_reds else 0
+            
+            # 蓝球相关
             last_blue = last_draw.get('blue', 0)
             features['blue_diff'] = abs(target_num - last_blue) if last_blue > 0 else 99
             features['blue_same_parity'] = 1 if (target_num % 2) == (last_blue % 2) else 0
         
+        # 历史规律率
         features['edge_historical_rate'] = self._calc_edge_historical_rate(window_draws, target_num)
         features['gap_historical_rate'] = self._calc_gap_historical_rate(window_draws, target_num)
         
         return features
     
+    def _calculate_consecutive_length(self, reds: List[int], target_num: int) -> int:
+        """计算连号长度（与原版相同）"""
+        if target_num in reds:
+            return 0
+        
+        test_set = set(reds) | {target_num}
+        sorted_test = sorted(test_set)
+        
+        max_len = 1
+        current_len = 1
+        
+        for i in range(1, len(sorted_test)):
+            if sorted_test[i] == sorted_test[i-1] + 1:
+                current_len += 1
+                max_len = max(max_len, current_len)
+            else:
+                current_len = 1
+        
+        return max_len if max_len > 1 else 0
+    
     def _calc_edge_historical_rate(self, draws: List[Dict], target_num: int) -> float:
+        """计算边号历史开出率（与原版相同）"""
         if len(draws) < 2:
             return 0.0
         
@@ -2767,6 +2793,7 @@ class Method4Ensemble:
         return appear_next / appear_as_edge if appear_as_edge > 0 else 0
     
     def _calc_gap_historical_rate(self, draws: List[Dict], target_num: int) -> float:
+        """计算夹号历史开出率（与原版相同）"""
         if len(draws) < 2:
             return 0.0
         
@@ -2793,6 +2820,7 @@ class Method4Ensemble:
         return appear_next / appear_as_gap if appear_as_gap > 0 else 0
     
     def train(self) -> bool:
+        """训练XGBoost模型（与原版相同）"""
         if not XGB_AVAILABLE or len(self.draws) < MIN_TRAIN_DATA["方法4"]:
             return False
         
@@ -2830,9 +2858,12 @@ class Method4Ensemble:
             return False
     
     def predict_top_reds(self, n: int = 12) -> List[int]:
+        """预测Top N红球（与原版相同）"""
         if not self.is_trained or self.xgb_model is None:
-            method1 = Method1HotColdSum(self.draws)
-            return method1.get_top_reds_by_score(n)
+            # 降级到方法2
+            fallback = Method2DanTuo(self.draws)
+            top_reds = fallback._get_top_n_by_score(n) if hasattr(fallback, '_get_top_n_by_score') else list(range(1, 34))
+            return top_reds[:n] if len(top_reds) >= n else top_reds + list(range(1, 34))[:n-len(top_reds)]
         
         predictions = []
         for num in RED_NUMBERS:
@@ -2852,20 +2883,51 @@ class Method4Ensemble:
         predictions.sort(key=lambda x: x[1], reverse=True)
         return [num for num, _ in predictions[:n]]
     
+    def _calculate_blue_scores(self) -> Dict[int, float]:
+        """计算蓝球评分（使用新系统的简化版）"""
+        try:
+            blue_system = BlueScoreSystem(self.draws)
+            scores = {}
+            for num in range(1, 17):
+                scores[num] = blue_system.calculate_total_score(num)
+            return scores
+        except:
+            # 降级：使用频率评分
+            freq = {i: 0 for i in range(1, 17)}
+            for draw in self.draws[-100:]:
+                blue = draw.get('blue', 0)
+                if 1 <= blue <= 16:
+                    freq[blue] += 1
+            max_freq = max(freq.values()) if freq.values() else 1
+            return {num: cnt / max_freq for num, cnt in freq.items()}
+    
+    def _get_top_blues(self, n: int = 3) -> List[int]:
+        """获取评分最高的N个蓝球"""
+        blue_scores = self._calculate_blue_scores()
+        sorted_blues = sorted(blue_scores.items(), key=lambda x: x[1], reverse=True)
+        return [num for num, _ in sorted_blues[:n]]
+    
     def generate_bets(self, num_bets: int = 4, bet_type: str = "7+1") -> List[Dict]:
+        """
+        生成投注
+        修改：训练失败时降级到方法2（新实现）而非方法1
+        """
         if not self.is_trained:
             self.train()
         
         if not self.is_trained or self.xgb_model is None:
-            method1 = Method1HotColdSum(self.draws)
-            return method1.generate_bets(num_bets, bet_type)
+            # 降级到方法2（新实现的胆拖混合）
+            fallback = Method2DanTuo(self.draws)
+            return fallback.generate_bets(num_bets, bet_type)
         
+        # ML预测逻辑
         top_reds = self.predict_top_reds(12)
         if len(top_reds) < 6:
             top_reds = list(range(1, 34))
             random.shuffle(top_reds)
         
-        blue_scores = Method1HotColdSum(self.draws).calculate_blue_scores()
+        # 蓝球评分（使用新系统）
+        blue_scores = self._calculate_blue_scores()
         blue_weights = np.array([math.exp(blue_scores.get(i, 0)) for i in BLUE_NUMBERS])
         if np.sum(blue_weights) > 0:
             blue_weights = blue_weights / np.sum(blue_weights)
@@ -2875,14 +2937,17 @@ class Method4Ensemble:
         red_count = 7 if bet_type.startswith("7") else 8
         blue_count = 2 if bet_type == "7+2" else 1
         
-        top_blues = Method1HotColdSum(self.draws).get_top_blues_by_score(3)
+        # 获取Top蓝球（用于7+2）
+        top_blues = self._get_top_blues(3)
         
         bets = []
         for _ in range(num_bets):
+            # ML选择核心6码
             core_reds = top_reds[:6].copy()
             random.shuffle(core_reds)
             core_reds = sorted(core_reds[:6])
             
+            # 扩展为7码或8码
             final_reds = list(core_reds)
             if red_count > 6:
                 candidates = [r for r in top_reds if r not in final_reds]
@@ -2897,6 +2962,7 @@ class Method4Ensemble:
                 final_reds.extend(selected_extras)
                 final_reds = sorted(final_reds)
             
+            # 蓝球选择
             blues = []
             if blue_count == 1:
                 blue = np.random.choice(BLUE_NUMBERS, p=blue_weights)
@@ -2916,8 +2982,7 @@ class Method4Ensemble:
                 'blues': blues,
                 'blue': blues[0],
                 'sum': sum(final_reds),
-                'method': '方法4:XGBoost+规律特征',
-                'bet_type': bet_type
+                'method': '方法4:XGBoost+规律特征'
             })
         
         return bets
@@ -2994,7 +3059,594 @@ def generate_ensemble_bets(draws: List[Dict], num_bets: int = 4, bet_type: str =
         })
     
     return bets
+#---------------
+# ============================================================
+# 新规则系统 v15.0 - Method1NewRule
+# 替代原方法1，用于红球选号
+# ============================================================
 
+class Method1NewRule:
+    """
+    新规则系统 v15.0
+    核心特性：单号码评分 + 分池 + 动态降级 + 正弦拟合和值 + 后置筛选
+    """
+    
+    def __init__(self, draws: List[Dict]):
+        self.draws = draws
+        self.red_scores = None
+        self.normal_pool = None
+        self.cold_pool = None
+        
+        # 可调节参数（支持外部修改）
+        self.normal_threshold = 50      # 正常池阈值
+        self.normal_count_layer1 = 5    # 第1层正常池抽取数
+        self.cold_count_layer1 = 1      # 第1层冷码池抽取数
+        self.normal_count_layer2 = 4    # 第2层正常池抽取数
+        self.cold_count_layer2 = 2      # 第2层冷码池抽取数
+        self.temp_normal = 0.8          # 正常池温度
+        self.temp_cold = 1.2            # 冷码池温度
+        self.sum_tolerance = 12         # 和值容差
+        self.require_consecutive = True # 是否需要连号
+        self.max_attempts_layer1 = 500  # 第1层最大尝试次数
+        self.max_attempts_layer2 = 300  # 第2层最大尝试次数
+        
+        # 计算评分和分池
+        self._calculate_scores_and_pools()
+    
+    def _calculate_scores_and_pools(self):
+        """计算所有红球的综合评分并分池"""
+        self.red_scores = {}
+        for num in RED_NUMBERS:
+            self.red_scores[num] = self._calculate_total_score(num)
+        
+        # 分池
+        self.normal_pool = [num for num in RED_NUMBERS if self.red_scores[num] >= self.normal_threshold]
+        self.cold_pool = [num for num in RED_NUMBERS if self.red_scores[num] < self.normal_threshold]
+    
+    def _calculate_total_score(self, num: int) -> int:
+        """
+        计算单号码综合评分
+        公式：基础分 + 加分项（可叠加）
+        """
+        # 计算遗漏期数
+        absence = self._calculate_absence(num)
+        
+        # 基础分
+        base_score = self._get_base_score(absence)
+        
+        # 如果是上期号码，直接返回70分（不再叠加其他加分）
+        if absence == 0:
+            return base_score
+        
+        bonus = 0
+        
+        # 1. 频率加速度 Δf@(20→5) > 0.1
+        if self._calculate_frequency_acceleration(num) > 0.1:
+            bonus += 25
+        
+        # 2. 疏转密（trend > 0.12 且 最近出现≥2次）
+        if self._is_density_turning(num):
+            bonus += 20
+        
+        # 3. 遗漏13-20期加分
+        if 13 <= absence <= 20:
+            bonus += 30
+        
+        # 4. 隔期模式（间隔恰好2期）
+        if self._is_alternating(num):
+            bonus += 12
+        
+        return base_score + bonus
+    
+    def _calculate_absence(self, num: int) -> int:
+        """计算遗漏期数"""
+        absence = 0
+        for draw in reversed(self.draws):
+            if num in draw.get('reds', []):
+                break
+            absence += 1
+        return absence
+    
+    def _get_base_score(self, absence: int) -> int:
+        """基础分（基于遗漏值）"""
+        if absence == 0:
+            return 70
+        elif 1 <= absence <= 5:
+            return 50
+        elif 6 <= absence <= 10:
+            return 20
+        elif 11 <= absence <= 15:
+            return 15
+        elif 16 <= absence <= 20:
+            return 10
+        elif 21 <= absence <= 30:
+            return 8
+        else:
+            return 5
+    
+    def _calculate_frequency_acceleration(self, num: int) -> float:
+        """计算频率加速度 Δf@(20→5)"""
+        if len(self.draws) < 20:
+            return 0
+        
+        recent_5 = self.draws[-5:]
+        recent_20 = self.draws[-20:]
+        
+        count_5 = sum(1 for d in recent_5 if num in d.get('reds', []))
+        count_20 = sum(1 for d in recent_20 if num in d.get('reds', []))
+        
+        return (count_5 / 5) - (count_20 / 20)
+    
+    def _is_density_turning(self, num: int) -> bool:
+        """判断是否处于疏转密状态"""
+        if len(self.draws) < 50:
+            return False
+        
+        # 计算趋势（最近25期 vs 前25期）
+        half = 25
+        recent = self.draws[-half:]
+        earlier = self.draws[-50:-half]
+        
+        recent_density = sum(1 for d in recent if num in d.get('reds', [])) / len(recent)
+        earlier_density = sum(1 for d in earlier if num in d.get('reds', [])) / len(earlier) if earlier else 0
+        
+        trend = recent_density - earlier_density
+        
+        # 最近出现次数
+        recent_count = sum(1 for d in self.draws[-5:] if num in d.get('reds', []))
+        
+        return trend > 0.12 and recent_count >= 2
+    
+    def _is_alternating(self, num: int) -> bool:
+        """判断是否为隔期模式（间隔恰好2期）"""
+        positions = [i for i, draw in enumerate(self.draws) if num in draw.get('reds', [])]
+        if len(positions) < 2:
+            return False
+        last_gap = positions[-1] - positions[-2]
+        return last_gap == 2
+    
+    def _softmax_select(self, pool: List[int], scores: Dict[int, int], temperature: float) -> int:
+        """Softmax概率抽取"""
+        if not pool:
+            return None
+        score_list = [scores[num] for num in pool]
+        exp_scores = np.exp(np.array(score_list) / temperature)
+        probs = exp_scores / np.sum(exp_scores)
+        return np.random.choice(pool, p=probs)
+    
+    def _get_target_sum(self) -> Tuple[int, int]:
+        """正弦拟合预测和值"""
+        if len(self.draws) < 10:
+            return 102, self.sum_tolerance
+        
+        # 获取最近10期和值
+        recent_sums = []
+        for draw in self.draws[-10:]:
+            reds = draw.get('reds', [])
+            if reds:
+                recent_sums.append(sum(reds))
+        
+        if len(recent_sums) < 10:
+            return 102, self.sum_tolerance
+        
+        try:
+            from scipy.optimize import curve_fit
+            
+            def sine_func(x, A, omega, phi, C):
+                return A * np.sin(omega * x + phi) + C
+            
+            x = np.arange(len(recent_sums))
+            y = np.array(recent_sums)
+            
+            A_guess = (np.max(y) - np.min(y)) / 2
+            C_guess = np.mean(y)
+            omega_guess = 2 * np.pi / 6.5
+            
+            params, _ = curve_fit(
+                sine_func, x, y,
+                p0=[A_guess, omega_guess, 0, C_guess],
+                bounds=([0, 2*np.pi/15, -np.pi, 80], 
+                        [50, 2*np.pi/4, np.pi, 125]),
+                maxfev=2000
+            )
+            A, omega, phi, C = params
+            next_val = sine_func(len(recent_sums), A, omega, phi, C)
+            target = max(80, min(125, int(round(next_val))))
+            return target, self.sum_tolerance
+        except:
+            short_mean = np.mean(recent_sums)
+            deviation = short_mean - 102
+            if abs(deviation) > 10:
+                target = 102 + int(deviation * 0.5)
+            else:
+                target = 102
+            return max(80, min(125, target)), self.sum_tolerance
+    
+    def _has_consecutive(self, reds: List[int]) -> bool:
+        """检查是否有连号"""
+        for i in range(1, len(reds)):
+            if reds[i] - reds[i-1] == 1:
+                return True
+        return False
+    
+    def _is_valid(self, reds: List[int], target_sum: int) -> bool:
+        """后置筛选：和值 + 连号"""
+        total = sum(reds)
+        if abs(total - target_sum) > self.sum_tolerance:
+            return False
+        if self.require_consecutive and not self._has_consecutive(reds):
+            return False
+        return True
+    
+    def _sample_reds(self, normal_count: int, cold_count: int) -> List[int]:
+        """分层抽取指定数量的红球"""
+        selected = []
+        
+        # 从正常池抽取
+        temp_normal = self.normal_pool.copy()
+        for _ in range(min(normal_count, len(temp_normal))):
+            if not temp_normal:
+                break
+            num = self._softmax_select(temp_normal, self.red_scores, self.temp_normal)
+            if num is not None:
+                selected.append(num)
+                temp_normal.remove(num)
+        
+        # 从冷码池抽取
+        temp_cold = self.cold_pool.copy()
+        for _ in range(min(cold_count, len(temp_cold))):
+            if not temp_cold:
+                break
+            num = self._softmax_select(temp_cold, self.red_scores, self.temp_cold)
+            if num is not None:
+                selected.append(num)
+                temp_cold.remove(num)
+        
+        selected = list(set(selected))
+        if len(selected) < 6:
+            return None
+        return sorted(selected[:6])
+    
+    def _expand_to_7(self, reds_6: List[int]) -> List[int]:
+        """将6个红球扩展为7个（从正常池补充）"""
+        candidates = [n for n in self.normal_pool if n not in reds_6]
+        if not candidates:
+            candidates = [n for n in RED_NUMBERS if n not in reds_6]
+        if candidates:
+            extra = self._softmax_select(candidates, self.red_scores, self.temp_normal)
+            if extra is not None:
+                return sorted(reds_6 + [extra])
+        return sorted(reds_6 + [np.random.choice([n for n in RED_NUMBERS if n not in reds_6])])
+    
+    def generate_bets(self, num_bets: int = 4, bet_type: str = "7+1") -> List[Dict]:
+        """
+        生成投注（核心方法）
+        动态降级策略：5+1 → 4+2 → 保底
+        """
+        target_sum, _ = self._get_target_sum()
+        bets = []
+        
+        for _ in range(num_bets):
+            success = False
+            
+            # ========== 第1层：5+1 ==========
+            for _ in range(self.max_attempts_layer1):
+                selected = self._sample_reds(self.normal_count_layer1, self.cold_count_layer1)
+                if selected and self._is_valid(selected, target_sum):
+                    # 扩展为7+1
+                    final_reds = self._expand_to_7(selected)
+                    bets.append({
+                        'reds': final_reds,
+                        'blues': [8],  # 蓝球暂用默认值，后续由蓝球系统覆盖
+                        'blue': 8,
+                        'sum': sum(final_reds),
+                        'method': '新规则系统 v15.0 (5+1)'
+                    })
+                    success = True
+                    break
+            
+            if success:
+                continue
+            
+            # ========== 第2层：4+2（放宽容差） ==========
+            original_tolerance = self.sum_tolerance
+            self.sum_tolerance = min(20, int(original_tolerance * 1.5))
+            
+            for _ in range(self.max_attempts_layer2):
+                selected = self._sample_reds(self.normal_count_layer2, self.cold_count_layer2)
+                if selected and self._is_valid(selected, target_sum):
+                    final_reds = self._expand_to_7(selected)
+                    bets.append({
+                        'reds': final_reds,
+                        'blues': [8],
+                        'blue': 8,
+                        'sum': sum(final_reds),
+                        'method': '新规则系统 v15.0 (4+2 放宽和值)'
+                    })
+                    success = True
+                    break
+            
+            self.sum_tolerance = original_tolerance
+            
+            if success:
+                continue
+            
+            # ========== 第3层：放弃和值，只保留连号 ==========
+            self.require_consecutive = True
+            for _ in range(self.max_attempts_layer2):
+                selected = self._sample_reds(self.normal_count_layer2, self.cold_count_layer2)
+                if selected and self._has_consecutive(selected):
+                    final_reds = self._expand_to_7(selected)
+                    bets.append({
+                        'reds': final_reds,
+                        'blues': [8],
+                        'blue': 8,
+                        'sum': sum(final_reds),
+                        'method': '新规则系统 v15.0 (仅连号)'
+                    })
+                    success = True
+                    break
+            
+            if success:
+                continue
+            
+            # ========== 第4层：保底随机 ==========
+            selected = sorted(np.random.choice(RED_NUMBERS, size=6, replace=False))
+            final_reds = self._expand_to_7(selected)
+            bets.append({
+                'reds': final_reds,
+                'blues': [8],
+                'blue': 8,
+                'sum': sum(final_reds),
+                'method': '新规则系统 v15.0 (保底随机)'
+            })
+        
+        return bets
+#---------------------------
+# ============================================================
+# 蓝球评分系统 v15.0
+# 统一评分制 + Softmax概率抽取
+# ============================================================
+
+class BlueScoreSystem:
+    """
+    蓝球评分系统
+    核心特性：多维评分 + 正弦拟合 + Softmax抽取
+    """
+    
+    def __init__(self, draws: List[Dict]):
+        self.draws = draws
+        
+        # 可调节参数（支持外部修改）
+        self.temperature = 0.8           # Softmax温度
+        self.neighbor1_bonus = 20        # 邻号±1加分
+        self.neighbor2_bonus = 5         # 邻号±2加分
+        self.sine_fit_bonus = 20         # 正弦拟合加分
+        self.freq_acc_bonus = 15         # 频率加速度加分
+        self.mid_absence_bonus = 12      # 遗漏9-13期加分
+        self.alternating_bonus = 5       # 隔期模式加分
+        self.remainder_gap4_bonus = 15   # 除3余数空缺4-5期加分
+        self.remainder_gap6_bonus = 10   # 除3余数空缺6-7期加分
+        
+        # 正弦拟合预测值（缓存）
+        self._sine_prediction = None
+    
+    def calculate_absence(self, num: int) -> int:
+        """计算蓝球遗漏期数"""
+        absence = 0
+        for draw in reversed(self.draws):
+            if draw.get('blue', 0) == num:
+                break
+            absence += 1
+        return absence
+    
+    def get_base_score(self, absence: int) -> int:
+        """基础分（基于遗漏值）"""
+        if absence == 0:
+            return 35      # 重号
+        elif 1 <= absence <= 4:
+            return 50      # 短期热号（最高）
+        elif 5 <= absence <= 8:
+            return 40      # 中期偏热
+        elif 9 <= absence <= 12:
+            return 30      # 中等
+        elif 13 <= absence <= 16:
+            return 20      # 冷热交界
+        elif 17 <= absence <= 24:
+            return 12      # 偏冷
+        elif 25 <= absence <= 32:
+            return 8       # 冷
+        else:
+            return 5       # 极冷
+    
+    def calculate_frequency_acceleration(self, num: int) -> float:
+        """
+        计算频率加速度 Δf@(20→10)
+        注意：只适用于遗漏≤10的蓝球，遗漏>10时返回0
+        """
+        absence = self.calculate_absence(num)
+        if absence > 10:
+            return 0
+        
+        if len(self.draws) < 20:
+            return 0
+        
+        recent_10 = self.draws[-10:]
+        recent_20 = self.draws[-20:]
+        
+        count_10 = sum(1 for d in recent_10 if d.get('blue', 0) == num)
+        count_20 = sum(1 for d in recent_20 if d.get('blue', 0) == num)
+        
+        return (count_10 / 10) - (count_20 / 20)
+    
+    def is_alternating(self, num: int) -> bool:
+        """判断是否为隔期模式（间隔恰好2期）"""
+        positions = [i for i, draw in enumerate(self.draws) if draw.get('blue', 0) == num]
+        if len(positions) < 2:
+            return False
+        last_gap = positions[-1] - positions[-2]
+        return last_gap == 2
+    
+    def get_neighbor_bonus(self, current_blue: int) -> int:
+        """计算邻号加分（基于上期蓝球）"""
+        if len(self.draws) < 1:
+            return 0
+        
+        last_blue = self.draws[-1].get('blue', 8)
+        
+        # 计算圆环上的最小距离（1和16相邻）
+        diff = min(abs(current_blue - last_blue), 
+                   16 - abs(current_blue - last_blue))
+        
+        if diff == 1:
+            return self.neighbor1_bonus
+        elif diff == 2:
+            return self.neighbor2_bonus
+        else:
+            return 0
+    
+    def get_remainder_gap_bonus(self, num: int) -> int:
+        """计算除3余数空缺加分"""
+        remainder = num % 3
+        
+        # 计算该余数组最近的空缺期数
+        gap = 0
+        for draw in reversed(self.draws):
+            blue = draw.get('blue', 0)
+            if blue % 3 == remainder:
+                break
+            gap += 1
+        
+        if 4 <= gap <= 5:
+            return self.remainder_gap4_bonus
+        elif 6 <= gap <= 7:
+            return self.remainder_gap6_bonus
+        else:
+            return 0
+    
+    def get_sine_fit_prediction(self) -> int:
+        """
+        正弦拟合预测下一期蓝球（返回单个预测值）
+        使用8期窗口
+        """
+        if len(self.draws) < 8:
+            # 数据不足，返回近期均值
+            recent_blues = [d.get('blue', 8) for d in self.draws[-5:] if d.get('blue', 0) > 0]
+            if recent_blues:
+                return int(round(np.mean(recent_blues)))
+            return 8
+        
+        blue_sequence = [d.get('blue', 0) for d in self.draws[-8:] if d.get('blue', 0) > 0]
+        if len(blue_sequence) < 6:
+            return int(round(np.mean(blue_sequence)))
+        
+        try:
+            from scipy.optimize import curve_fit
+            
+            def sine_func(x, A, omega, phi, C):
+                return A * np.sin(omega * x + phi) + C
+            
+            x = np.arange(len(blue_sequence))
+            y = np.array(blue_sequence)
+            
+            A_guess = (np.max(y) - np.min(y)) / 2
+            C_guess = np.mean(y)
+            omega_guess = 2 * np.pi / 9
+            
+            params, _ = curve_fit(
+                sine_func, x, y,
+                p0=[A_guess, omega_guess, 0, C_guess],
+                bounds=([0, 2*np.pi/15, -np.pi, 1],
+                        [8, 2*np.pi/5, np.pi, 16]),
+                maxfev=2000
+            )
+            A, omega, phi, C = params
+            pred_val = sine_func(len(blue_sequence), A, omega, phi, C)
+            pred = int(round(pred_val))
+            return max(1, min(16, pred))
+        except:
+            return int(round(np.mean(blue_sequence)))
+    
+    def get_sine_fit_bonus(self, num: int) -> int:
+        """正弦拟合加分：预测值±2范围内+20分"""
+        if self._sine_prediction is None:
+            self._sine_prediction = self.get_sine_fit_prediction()
+        
+        pred = self._sine_prediction
+        
+        # 计算圆环上的最小距离
+        diff = min(abs(num - pred), 16 - abs(num - pred))
+        
+        if diff <= 2:
+            return self.sine_fit_bonus
+        return 0
+    
+    def calculate_total_score(self, num: int) -> int:
+        """
+        计算蓝球综合评分
+        公式：基础分 + 各项加分
+        """
+        absence = self.calculate_absence(num)
+        
+        # 基础分
+        score = self.get_base_score(absence)
+        
+        # 1. 频率加速度（只适用于遗漏≤10）
+        if absence <= 10:
+            delta_f = self.calculate_frequency_acceleration(num)
+            if delta_f > 0.1:
+                score += self.freq_acc_bonus
+        
+        # 2. 遗漏9-13期加分
+        if 9 <= absence <= 13:
+            score += self.mid_absence_bonus
+        
+        # 3. 邻号加分
+        score += self.get_neighbor_bonus(num)
+        
+        # 4. 隔期模式加分
+        if self.is_alternating(num):
+            score += self.alternating_bonus
+        
+        # 5. 除3余数空缺加分
+        score += self.get_remainder_gap_bonus(num)
+        
+        # 6. 正弦拟合加分
+        score += self.get_sine_fit_bonus(num)
+        
+        return score
+    
+    def select_blue(self) -> int:
+        """
+        选择蓝球
+        所有16个蓝球按总分Softmax概率抽取
+        """
+        # 计算所有蓝球的评分
+        all_blues = list(range(1, 17))
+        scores = {}
+        for num in all_blues:
+            scores[num] = self.calculate_total_score(num)
+        
+        # Softmax概率抽取
+        score_list = [scores[num] for num in all_blues]
+        exp_scores = np.exp(np.array(score_list) / self.temperature)
+        probs = exp_scores / np.sum(exp_scores)
+        
+        selected = np.random.choice(all_blues, p=probs)
+        
+        return int(selected)
+
+
+# ============================================================
+# 辅助函数：供外部直接调用
+# ============================================================
+
+def select_blue_with_new_system(draws: List[Dict]) -> int:
+    """
+    使用新蓝球系统选择蓝球（快捷函数）
+    """
+    system = BlueScoreSystem(draws)
+    return system.select_blue()
 
 # ==================== 投注生成工厂 ====================
 class BetGenerator:
@@ -3018,13 +3670,19 @@ class BetGenerator:
         return generate_ensemble_bets(draws, num_bets, bet_type)
 
 
-# ==================== 优化版回测函数（支持3种种子模式） ====================
+# ============================================================
+# 优化版回测函数（支持3种种子模式）
+# 修改：方法1改为使用 Method1NewRule（新规则系统）
+# ============================================================
+
 def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookback: int = 10, 
                  seed_mode: str = "date", fixed_seed_value: int = 1) -> Dict:
     """
     优化版ROI回测 - 支持3种种子模式
+    修改：方法1使用 Method1NewRule（新规则系统 v15.0）
     
     参数:
+        method_name: "方法1", "方法2", "方法3", "方法4"
         seed_mode: "date" | "fixed" | "random"
         fixed_seed_value: 当 seed_mode="fixed" 时使用的种子值
     """
@@ -3035,6 +3693,7 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
         "方法4": 400
     }.get(method_name, 0)
     
+    # 获取训练窗口（与原版一致）
     train_window = TRAIN_WINDOWS.get(method_name, 100)
     
     if len(draws) < train_window + lookback:
@@ -3058,7 +3717,6 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
         
         # ========== 根据模式设置种子 ==========
         if seed_mode == "date":
-            # 模式1：每期用自己的开奖日期+21:15
             test_date = test_data.get('date')
             if test_date:
                 try:
@@ -3081,11 +3739,9 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
                 seed_val = 42 + method_seed_offset + i
                 
         elif seed_mode == "fixed":
-            # 模式2：整个回测使用同一个固定种子
             seed_val = fixed_seed_value + method_seed_offset
             
         elif seed_mode == "random":
-            # 模式3：每期随机生成种子
             seed_val = random.randint(0, 1000000) + method_seed_offset
             
         else:
@@ -3100,23 +3756,52 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
         if model_key not in trained_models:
             train_data = draws[i - train_window:i]
             
+            # ========== 根据方法名调用对应的生成器 ==========
             if method_name == "方法1":
-                generator = Method1HotColdSum(train_data)
+                # 修改：使用新规则系统 v15.0
+                generator = Method1NewRule(train_data)
                 bets = generator.generate_bets(num_bets, "7+1")
+                
+                # 使用新蓝球系统
+                blue_system = BlueScoreSystem(train_data)
+                for bet in bets:
+                    blue = blue_system.select_blue()
+                    bet['blues'] = [blue]
+                    bet['blue'] = blue
+            
             elif method_name == "方法2":
+                # 使用新实现的胆拖混合
                 generator = Method2DanTuo(train_data)
                 bets = generator.generate_bets(num_bets, "7+1")
+                
+                # 使用新蓝球系统
+                blue_system = BlueScoreSystem(train_data)
+                for bet in bets:
+                    blue = blue_system.select_blue()
+                    bet['blues'] = [blue]
+                    bet['blue'] = blue
+            
             elif method_name == "方法3":
                 generator = Method3LightGBM(train_data)
                 generator.train()
                 bets = generator.generate_bets(num_bets, "7+1")
+                # 方法3内部已有蓝球逻辑
+            
             elif method_name == "方法4":
                 generator = Method4Ensemble(train_data)
                 generator.train()
                 bets = generator.generate_bets(num_bets, "7+1")
+                # 方法4内部已有蓝球逻辑
+            
             else:
-                generator = Method1HotColdSum(train_data)
+                # 默认使用新规则系统
+                generator = Method1NewRule(train_data)
                 bets = generator.generate_bets(num_bets, "7+1")
+                blue_system = BlueScoreSystem(train_data)
+                for bet in bets:
+                    blue = blue_system.select_blue()
+                    bet['blues'] = [blue]
+                    bet['blue'] = blue
             
             trained_models[model_key] = bets
         else:
@@ -3172,11 +3857,13 @@ print("=" * 60)
 
 # ============================================================
 # 第5部分：主页面UI + 动态投注 + 回测面板 + 侧边栏
-# 版本：v14.1
-# 新增：回测面板支持3种种子模式选择
-#   1. 日期+21:15（每期用自己的开奖日期）
-#   2. 用户输入固定种子
-#   3. 机器自动产生（每期随机）
+# 版本：v15.0
+# 修改内容：
+#   1. 方法1替换为新规则系统 v15.0
+#   2. 删除"连号/跳号"和"上期重复1-2个"复选框
+#   3. 增加高级参数折叠面板（方法1专用）
+#   4. 蓝球统一使用 BlueScoreSystem
+#   5. 回测函数调用新方法1
 # ============================================================
 
 # ==================== 初始化Session State ====================
@@ -3202,7 +3889,7 @@ if 'last_bet_type' not in st.session_state:
 # ==================== 主页面标题 ====================
 col_title, col_settings = st.columns([0.9, 0.1])
 with col_title:
-    st.title("🎯 双色球AI智能选号工具 - 专业版 v14.1")
+    st.title("🎯 双色球AI智能选号工具 - 专业版 v15.0")
 with col_settings:
     if st.button("⚙️ 管理员", key="settings_icon", help="管理员设置"):
         st.session_state['show_admin'] = not st.session_state.get('show_admin', False)
@@ -3242,7 +3929,6 @@ if not draws or len(draws) < 5:
     st.stop()
 
 # ==================== 显示数据概览 ====================
-# ==================== 数据概览 ====================
 col_title, col_button = st.columns([3, 2])
 
 with col_title:
@@ -3554,18 +4240,74 @@ with col1:
 with col2:
     bet_type = st.selectbox("复式类型", ["7+1 (14元)", "7+2 (28元)", "8+1 (56元)"], key="bet_type")
 with col3:
+    # 修改：方法1为默认推荐，调整顺序
     ai_model = st.selectbox(
         "AI模型",
-        ["方法5: 综合模式 ⭐推荐", "方法4: XGBoost", "方法3: LightGBM", "方法2: 胆拖混合", "方法1: 当前方法"],
+        ["方法1: 新规则系统(v15.0) ⭐推荐", "方法2: 胆拖混合", "方法3: LightGBM", "方法4: XGBoost", "方法5: 综合模式"],
         key="ai_model"
     )
 
-col1, col2 = st.columns(2)
-with col1:
-    require_pattern = st.checkbox("☑ 连号/跳号要求", value=True, key="require_pattern")
-with col2:
-    require_repeat = st.checkbox("☑ 上期重复1-2个要求", value=True, key="require_repeat")
+# ==================== 删除两个复选框 ====================
+# 原"连号/跳号要求"和"上期重复1-2个要求"已删除
+# 连号要求已移入高级参数面板
 
+# ==================== 高级参数折叠面板（方法1专用） ====================
+# 当选择方法1时显示高级参数
+if "方法1" in ai_model:
+    with st.expander("🔧 高级参数设置（方法1专用）", expanded=False):
+        st.markdown("**红球参数**")
+        
+        col_adv1, col_adv2, col_adv3 = st.columns(3)
+        with col_adv1:
+            normal_threshold = st.number_input("正常池阈值", min_value=30, max_value=70, value=50, step=5, key="adv_normal_threshold")
+            normal_count = st.number_input("正常池抽取数（第1层）", min_value=3, max_value=6, value=5, step=1, key="adv_normal_count")
+            cold_count = st.number_input("冷码池抽取数（第1层）", min_value=0, max_value=3, value=1, step=1, key="adv_cold_count")
+        
+        with col_adv2:
+            normal_temp = st.slider("正常池温度", min_value=0.5, max_value=1.5, value=0.8, step=0.1, key="adv_normal_temp")
+            cold_temp = st.slider("冷码池温度", min_value=0.8, max_value=2.0, value=1.2, step=0.1, key="adv_cold_temp")
+            sum_tolerance = st.number_input("和值容差", min_value=8, max_value=20, value=12, step=1, key="adv_sum_tolerance")
+        
+        with col_adv3:
+            require_consecutive = st.checkbox("要求连号（≥1个）", value=True, key="adv_require_consecutive")
+            max_attempts = st.number_input("最大尝试次数", min_value=100, max_value=1000, value=500, step=100, key="adv_max_attempts")
+        
+        st.markdown("**蓝球参数**")
+        
+        col_adv4, col_adv5, col_adv6 = st.columns(3)
+        with col_adv4:
+            blue_temperature = st.slider("蓝球Softmax温度", min_value=0.5, max_value=1.5, value=0.8, step=0.1, key="adv_blue_temp")
+            neighbor1_bonus = st.number_input("邻号(±1)加分", min_value=0, max_value=40, value=20, step=5, key="adv_neighbor1")
+            neighbor2_bonus = st.number_input("邻号(±2)加分", min_value=0, max_value=20, value=5, step=5, key="adv_neighbor2")
+        
+        with col_adv5:
+            sine_fit_bonus = st.number_input("正弦拟合加分", min_value=0, max_value=40, value=20, step=5, key="adv_sine_bonus")
+            freq_acc_bonus = st.number_input("频率加速度加分", min_value=0, max_value=30, value=15, step=5, key="adv_freq_bonus")
+            mid_absence_bonus = st.number_input("遗漏9-13期加分", min_value=0, max_value=30, value=12, step=3, key="adv_mid_bonus")
+        
+        with col_adv6:
+            remainder_gap4_bonus = st.number_input("除3余数空缺4-5期加分", min_value=0, max_value=30, value=15, step=5, key="adv_remainder4")
+            remainder_gap6_bonus = st.number_input("除3余数空缺6-7期加分", min_value=0, max_value=20, value=10, step=5, key="adv_remainder6")
+else:
+    # 未选择方法1时，设置默认值
+    normal_threshold = 50
+    normal_count = 5
+    cold_count = 1
+    normal_temp = 0.8
+    cold_temp = 1.2
+    sum_tolerance = 12
+    require_consecutive = True
+    max_attempts = 500
+    blue_temperature = 0.8
+    neighbor1_bonus = 20
+    neighbor2_bonus = 5
+    sine_fit_bonus = 20
+    freq_acc_bonus = 15
+    mid_absence_bonus = 12
+    remainder_gap4_bonus = 15
+    remainder_gap6_bonus = 10
+
+# ==================== 随机种子设置 ====================
 st.markdown("**🎲 随机种子设置**")
 col1, col2 = st.columns(2)
 with col1:
@@ -3584,6 +4326,7 @@ with col_refresh_ml:
         st.success("ML缓存已清除！下次生成投注时会重新训练。")
         st.rerun()
 
+# ==================== 生成投注按钮 ====================
 if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
     if num_bets == 0:
         st.warning("💤 您选择了0组投注，未生成任何号码")
@@ -3602,11 +4345,97 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
         with st.spinner(f"正在使用 {ai_model} 生成投注..."):
             bet_type_code = bet_type.split(' ')[0]
             
-            if "综合模式" in ai_model:
-                bets = BetGenerator.generate_ensemble(draws, num_bets, bet_type_code)
-            else:
-                method_name = ai_model.split(":")[0] if ":" in ai_model else ai_model
-                bets = BetGenerator.generate(method_name, draws, num_bets, bet_type_code)
+            # 根据选择的模型调用对应方法
+            if "方法1" in ai_model:
+                # 新规则系统
+                generator = Method1NewRule(draws)
+                # 应用高级参数
+                generator.normal_threshold = normal_threshold
+                generator.normal_count_layer1 = normal_count
+                generator.cold_count_layer1 = cold_count
+                generator.temp_normal = normal_temp
+                generator.temp_cold = cold_temp
+                generator.sum_tolerance = sum_tolerance
+                generator.require_consecutive = require_consecutive
+                generator.max_attempts_layer1 = max_attempts
+                generator.max_attempts_layer2 = max_attempts // 2
+                bets = generator.generate_bets(num_bets, bet_type_code)
+                
+                # 使用新蓝球系统替换蓝球
+                blue_system = BlueScoreSystem(draws)
+                blue_system.temperature = blue_temperature
+                blue_system.neighbor1_bonus = neighbor1_bonus
+                blue_system.neighbor2_bonus = neighbor2_bonus
+                blue_system.sine_fit_bonus = sine_fit_bonus
+                blue_system.freq_acc_bonus = freq_acc_bonus
+                blue_system.mid_absence_bonus = mid_absence_bonus
+                blue_system.remainder_gap4_bonus = remainder_gap4_bonus
+                blue_system.remainder_gap6_bonus = remainder_gap6_bonus
+                
+                for bet in bets:
+                    blue = blue_system.select_blue()
+                    bet['blues'] = [blue]
+                    bet['blue'] = blue
+            
+            elif "方法2" in ai_model:
+                generator = Method2DanTuo(draws)
+                bets = generator.generate_bets(num_bets, bet_type_code)
+                # 使用新蓝球系统
+                blue_system = BlueScoreSystem(draws)
+                blue_system.temperature = blue_temperature
+                for bet in bets:
+                    blue = blue_system.select_blue()
+                    bet['blues'] = [blue]
+                    bet['blue'] = blue
+            
+            elif "方法3" in ai_model:
+                generator = Method3LightGBM(draws)
+                bets = generator.generate_bets(num_bets, bet_type_code)
+                # 方法3内部已有蓝球逻辑
+            
+            elif "方法4" in ai_model:
+                generator = Method4Ensemble(draws)
+                bets = generator.generate_bets(num_bets, bet_type_code)
+                # 方法4内部已有蓝球逻辑
+            
+            else:  # 方法5: 综合模式
+                # 综合模式：基于新方法1-4投票
+                # 方法1投票
+                generator1 = Method1NewRule(draws)
+                bets1 = generator1.generate_bets(num_bets, bet_type_code)
+                # 方法2投票
+                generator2 = Method2DanTuo(draws)
+                bets2 = generator2.generate_bets(num_bets, bet_type_code)
+                # 方法3投票
+                generator3 = Method3LightGBM(draws)
+                bets3 = generator3.generate_bets(num_bets, bet_type_code)
+                # 方法4投票
+                generator4 = Method4Ensemble(draws)
+                bets4 = generator4.generate_bets(num_bets, bet_type_code)
+                
+                # 合并所有投注，统计频率
+                all_reds = []
+                all_blues = []
+                for bet in bets1 + bets2 + bets3 + bets4:
+                    all_reds.extend(bet['reds'])
+                    all_blues.extend(bet.get('blues', [bet['blue']]))
+                
+                from collections import Counter
+                red_counter = Counter(all_reds)
+                blue_counter = Counter(all_blues)
+                
+                # 取频率最高的7红+2蓝
+                top_reds = [num for num, _ in red_counter.most_common(7)]
+                top_reds.sort()
+                top_blues = [num for num, _ in blue_counter.most_common(2)]
+                
+                bets = [{
+                    'reds': top_reds,
+                    'blues': top_blues,
+                    'blue': top_blues[0],
+                    'sum': sum(top_reds),
+                    'method': '方法5:综合模式(v15.0)'
+                }]
             
             st.session_state['generated_bets'] = bets
             st.session_state['model_used'] = ai_model
@@ -3614,6 +4443,7 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
         
         st.success(f"✅ 使用 {ai_model} 生成 {len(bets)} 组 {bet_type_code} 复式投注")
 
+# ==================== 显示投注结果 ====================
 if st.session_state.get('generated_bets'):
     bets = st.session_state['generated_bets']
     model_used = st.session_state.get('model_used', '未知')
@@ -3658,7 +4488,7 @@ if st.session_state.get('generated_bets'):
 
 st.markdown("---")
 
-# ==================== ROI回测分析（新增种子模式选择） ====================
+# ==================== ROI回测分析 ====================
 with st.expander("📈 ROI回测分析"):
     st.markdown("基于历史数据的回测分析（仅供参考）")
     
@@ -3680,7 +4510,7 @@ with st.expander("📈 ROI回测分析"):
             key="backtest_bets"
         )
     
-    # ========== 新增：种子模式选择 ==========
+    # 种子模式选择
     st.markdown("**🎲 随机种子模式**")
     
     seed_mode_option = st.radio(
@@ -3719,7 +4549,6 @@ with st.expander("📈 ROI回测分析"):
         if backtest_periods <= 0:
             st.error("请选择大于0的回测期数")
         else:
-            # 显示当前种子模式信息
             if seed_mode == "date":
                 st.info("🔬 种子模式：每期使用自己的开奖日期+21:15")
             elif seed_mode == "fixed":
@@ -3729,32 +4558,61 @@ with st.expander("📈 ROI回测分析"):
             
             with st.spinner(f"正在回测 {backtest_periods} 期，请稍候..."):
                 results_data = []
-                for method in ["方法1", "方法2", "方法3", "方法4"]:
-                    result = backtest_roi(
-                        draws, method, backtest_bets, backtest_periods,
-                        seed_mode=seed_mode, fixed_seed_value=fixed_seed_value
-                    )
-                    results_data.append({
-                        "方法": method,
-                        "ROI": float(result.get('roi', 0)),
-                        "总成本": int(result.get('total_cost', 0)),
-                        "总奖金": int(result.get('total_prize', 0)),
-                        "净收益": int(result.get('net', 0)),
-                        "中奖率": float(result.get('win_rate', 0))
-                    })
                 
-                # 添加方法5（综合模式）的回测
-                ensemble_result = backtest_roi(
+                # 方法1：新规则系统
+                result = backtest_roi(
+                    draws, "方法1", backtest_bets, backtest_periods,
+                    seed_mode=seed_mode, fixed_seed_value=fixed_seed_value
+                )
+                results_data.append({
+                    "方法": "方法1:新规则系统(v15.0)",
+                    "ROI": float(result.get('roi', 0)),
+                    "总成本": int(result.get('total_cost', 0)),
+                    "总奖金": int(result.get('total_prize', 0)),
+                    "净收益": int(result.get('net', 0)),
+                    "中奖率": float(result.get('win_rate', 0))
+                })
+                
+                # 方法2：胆拖混合
+                result = backtest_roi(
+                    draws, "方法2", backtest_bets, backtest_periods,
+                    seed_mode=seed_mode, fixed_seed_value=fixed_seed_value
+                )
+                results_data.append({
+                    "方法": "方法2:胆拖混合",
+                    "ROI": float(result.get('roi', 0)),
+                    "总成本": int(result.get('total_cost', 0)),
+                    "总奖金": int(result.get('total_prize', 0)),
+                    "净收益": int(result.get('net', 0)),
+                    "中奖率": float(result.get('win_rate', 0))
+                })
+                
+                # 方法3：LightGBM
+                result = backtest_roi(
+                    draws, "方法3", backtest_bets, backtest_periods,
+                    seed_mode=seed_mode, fixed_seed_value=fixed_seed_value
+                )
+                results_data.append({
+                    "方法": "方法3:LightGBM",
+                    "ROI": float(result.get('roi', 0)),
+                    "总成本": int(result.get('total_cost', 0)),
+                    "总奖金": int(result.get('total_prize', 0)),
+                    "净收益": int(result.get('net', 0)),
+                    "中奖率": float(result.get('win_rate', 0))
+                })
+                
+                # 方法4：XGBoost
+                result = backtest_roi(
                     draws, "方法4", backtest_bets, backtest_periods,
                     seed_mode=seed_mode, fixed_seed_value=fixed_seed_value
                 )
                 results_data.append({
-                    "方法": "方法5:综合模式",
-                    "ROI": ensemble_result.get('roi', 0),
-                    "总成本": ensemble_result.get('total_cost', 0),
-                    "总奖金": ensemble_result.get('total_prize', 0),
-                    "净收益": ensemble_result.get('net', 0),
-                    "中奖率": ensemble_result.get('win_rate', 0)
+                    "方法": "方法4:XGBoost",
+                    "ROI": float(result.get('roi', 0)),
+                    "总成本": int(result.get('total_cost', 0)),
+                    "总奖金": int(result.get('total_prize', 0)),
+                    "净收益": int(result.get('net', 0)),
+                    "中奖率": float(result.get('win_rate', 0))
                 })
                 
                 df_results = pd.DataFrame(results_data)
@@ -3780,7 +4638,6 @@ with st.expander("📈 ROI回测分析"):
                 
                 st.success(f"🏆 最佳表现: {best_method} (ROI: {best_roi:.1f}%)")
                 st.caption(f"📅 基于最近{backtest_periods}期回测，每组{backtest_bets}注")
-
 
 # ==================== 多期查奖 ====================
 st.subheader("🔍 多期查奖")
@@ -3873,7 +4730,7 @@ st.caption("⚠️ 本工具仅供学术研究和娱乐参考。双色球本质�
 
 # ==================== 侧边栏内容 ====================
 with st.sidebar:
-    st.markdown("### 🎰 双色球AI分析工具 v14.1")
+    st.markdown("### 🎰 双色球AI分析工具 v15.0")
     st.markdown("---")
     
     with st.expander("🤖 ML库状态", expanded=False):
@@ -3885,15 +4742,22 @@ with st.sidebar:
             st.markdown(f"{'✅' if SKLEARN_AVAILABLE else '❌'} **scikit-learn**")
         st.caption(f"MCP服务: {'✅ 可用' if MCP_AVAILABLE else '❌ 不可用'}")
     
-    with st.expander("📖 五种AI算法对比"):
+    with st.expander("📖 算法说明 v15.0"):
         st.markdown("""
         | 算法 | 核心原理 | 特点 |
         |------|---------|------|
-        | 🟢 方法1 | 冷热码+和值 | 快速 |
-        | 🟡 方法2 | 胆拖混合 | 追热号 |
-        | 🔵 方法3 | LightGBM | 非线性 |
-        | 🟣 方法4 | XGBoost | 鲁棒性好 |
-        | 🌟 方法5 | 综合投票 | 最稳定 |
+        | 🌟 方法1 | 新规则系统 | 评分+分层抽样+正弦拟合 ⭐推荐 |
+        | 🟡 方法2 | 胆拖混合（新版） | Top5胆码+Softmax |
+        | 🔵 方法3 | LightGBM | 梯度提升树 |
+        | 🟣 方法4 | XGBoost | 极端梯度提升 |
+        | 🌟 方法5 | 综合模式 | 新方法1-4投票 |
+        
+        **新规则系统 v15.0 核心特性**：
+        - 单号码多维评分（基础分+4类加分）
+        - 分池抽取（正常池+冷码池）
+        - 动态降级策略（5+1 → 4+2）
+        - 正弦拟合和值预测（±12）
+        - 蓝球多维评分（8类加分）
         """)
     
     with st.expander("💰 奖金结构（7+1复式）"):
@@ -3910,12 +4774,10 @@ with st.sidebar:
         """)
     
     st.markdown("---")
-    st.caption("DFSS智能选号工具 v14.1")
-    st.caption("更新: 2026-05-13")
-    st.caption("新增: 3种种子模式回测")
+    st.caption("DFSS智能选号工具 v15.0")
+    st.caption("更新: 2026-05-25")
+    st.caption("核心特性: 评分体系 | 分层抽样 | 正弦拟合 | 蓝球多维评分")
 
 
-print("第5部分加载完成（v14.1 - 支持3种种子模式回测）")
-print("=" * 60)
-print("所有代码加载完成！应用已就绪。")
+print("第5部分加载完成（v15.0 - UI修改版）")
 print("=" * 60)
