@@ -1226,26 +1226,25 @@ def sync_to_supabase_from_17500(max_periods: int = 500):
     
     # ========== 步骤1：获取数据库当前状态 ==========
     try:
-        # 获取最新期号
+        # 获取最新期号（降序，取第一条）
         response_latest = supabase.schema('ssq_schema').table('ssq_draws')\
             .select("period").order("period", desc=True).limit(1).execute()
         
-        # 获取最早期号
+        # 获取最早期号（升序，取第一条）
         response_oldest = supabase.schema('ssq_schema').table('ssq_draws')\
-            .select("period").order("period", asc=True).limit(1).execute()
+            .select("period").order("period").limit(1).execute()
         
         # 获取总期数
         response_count = supabase.schema('ssq_schema').table('ssq_draws')\
             .select("period", count="exact").execute()
         
         if response_latest.data and response_oldest.data:
-            latest_in_db = response_latest.data[0]["period"]  # 5位，如 "26057"
-            oldest_in_db = response_oldest.data[0]["period"]  # 5位，如 "24001"
+            latest_in_db = response_latest.data[0]["period"]
+            oldest_in_db = response_oldest.data[0]["period"]
             current_count = response_count.count
             
             progress_placeholder.info(f"📊 数据库状态: {current_count}期 ({oldest_in_db} ~ {latest_in_db})")
         else:
-            # 数据库为空
             latest_in_db = None
             oldest_in_db = None
             current_count = 0
@@ -1263,13 +1262,8 @@ def sync_to_supabase_from_17500(max_periods: int = 500):
         progress_placeholder.error("❌ 获取数据失败")
         return {"success": False, "error": "获取数据失败"}
     
-    # 建立 17500 数据的期号索引（7位期号 → 完整数据）
-    # 同时建立5位期号的快速查找
-    full_dict_7digit = {draw['period']: draw for draw in full_draws}  # 7位期号作key
-    full_periods_5digit = [p[2:] for p in full_dict_7digit.keys()]   # 所有5位期号列表
-    
     # ========== 步骤3：确定需要补充的数据 ==========
-    to_insert = []  # 存储需要插入的完整数据（7位格式）
+    to_insert = []
     
     if current_count == 0:
         # 数据库为空：直接取最新的500期
@@ -1277,12 +1271,10 @@ def sync_to_supabase_from_17500(max_periods: int = 500):
         progress_placeholder.info(f"📊 数据库为空，将初始化最新 {len(to_insert)} 期数据")
     
     else:
-        # 计算需要达到500期还缺多少期
         needed_count = max_periods - current_count
         
         # 3.1 补充新数据（比最新期号更大的）
         latest_5digit = int(latest_in_db)
-        latest_7digit = "20" + latest_in_db
         
         new_draws = []
         for draw in full_draws:
@@ -1295,27 +1287,22 @@ def sync_to_supabase_from_17500(max_periods: int = 500):
         # 3.2 如果还不够500期，补充旧数据（比最早期号更小的）
         old_draws = []
         if needed_count > len(new_draws):
-            # 还需要补充的旧数据数量
             need_old = needed_count - len(new_draws)
-            
             oldest_5digit = int(oldest_in_db)
             
-            # 从全量数据中找出比最早期号更小，且不在数据库中的期号
-            # 按期号降序排列，取最早的 need_old 条
             candidates = []
             for draw in full_draws:
                 period_5digit = int(draw['period'][2:])
                 if period_5digit < oldest_5digit:
                     candidates.append(draw)
             
-            # 取最旧的 need_old 条（即 candidates 的最后 need_old 条）
             if candidates:
                 old_draws = candidates[-need_old:] if len(candidates) > need_old else candidates
-                old_draws.reverse()  # 变成升序，从旧到新插入
+                old_draws.reverse()
         
-        # 合并：先插入旧数据（从旧到新），再插入新数据（从旧到新）
+        # 合并：从旧到新排列
         to_insert = old_draws + new_draws
-        to_insert.reverse()  # 最终从旧到新排列
+        to_insert.reverse()
         
         progress_placeholder.info(f"📊 需要补充: {len(new_draws)}期新数据 + {len(old_draws)}期旧数据 = {len(to_insert)}期")
     
@@ -1331,7 +1318,7 @@ def sync_to_supabase_from_17500(max_periods: int = 500):
         progress_placeholder.info(f"💾 插入进度: {i+1}/{len(to_insert)} (期号: {draw['period'][2:]})")
         try:
             reds = draw['reds']
-            period_5digit = draw['period'][2:]  # 7位转5位
+            period_5digit = draw['period'][2:]
             data = {
                 "period": period_5digit,
                 "date": draw['date'],
@@ -1350,18 +1337,18 @@ def sync_to_supabase_from_17500(max_periods: int = 500):
         except Exception as e:
             print(f"插入期号 {draw['period']} 失败: {e}")
     
-    # ========== 步骤5：保持500期（删除超出的最旧数据） ==========
+    # ========== 步骤5：保持500期 ==========
     deleted = 0
     progress_placeholder.info("🗑️ 正在检查并清理旧数据...")
     
     try:
         response = supabase.schema('ssq_schema').table('ssq_draws')\
-            .select("period").order("period", asc=True).execute()
+            .select("period").order("period").execute()
         
         all_periods = [row["period"] for row in response.data] if response.data else []
         
         if len(all_periods) > max_periods:
-            to_delete = all_periods[:len(all_periods) - max_periods]  # 删除最旧的
+            to_delete = all_periods[:len(all_periods) - max_periods]
             for period in to_delete:
                 try:
                     supabase.schema('ssq_schema').table('ssq_draws')\
