@@ -3676,10 +3676,17 @@ class BetGenerator:
 # ============================================================
 
 def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookback: int = 10,
-                 seed_mode: str = "date", fixed_seed_value: int = 1) -> Dict:
+                 seed_mode: str = "date", fixed_seed_value: int = 1,
+                 use_ml_signal: bool = False, signal_threshold: int = 50) -> Dict:
     """
-    优化版ROI回测 - 支持3种种子模式
-    修改：方法5直接复用方法1-4的投注结果
+    优化版ROI回测 - 支持3种种子模式 + ML信号过滤
+    
+    参数:
+        method_name: "方法1", "方法2", "方法3", "方法4", "方法5"
+        seed_mode: "date" | "fixed" | "random"
+        fixed_seed_value: 当 seed_mode="fixed" 时使用的种子值
+        use_ml_signal: 是否使用ML信号过滤（True/False）
+        signal_threshold: 信号强度阈值（0-100），低于此值不投注
     """
     method_seed_offset = {
         "方法1": 100,
@@ -3691,26 +3698,45 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
     
     train_window = TRAIN_WINDOWS.get(method_name, 100)
     if method_name == "方法5":
-        train_window = max(TRAIN_WINDOWS.values())  # 方法5使用最大窗口
+        train_window = max(TRAIN_WINDOWS.values())
     
     if len(draws) < train_window + lookback:
         return {
             "roi": 0, "total_cost": 0, "total_prize": 0, "net": 0,
-            "win_rate": 0, "periods": 0,
+            "win_rate": 0, "periods": 0, "bet_periods": 0, "skip_periods": 0,
             "error": f"数据不足：需要{train_window + lookback}期，当前{len(draws)}期"
         }
     
     total_cost = 0
     total_prize = 0
     win_count = 0
+    bet_periods = 0      # 实际投注的期数
+    skip_periods = 0     # 因信号不足跳过的期数
     prize_breakdown = {"first": 0, "second": 0, "third": 0, "fourth": 0, "fifth": 0, "sixth": 0, "fuyun": 0}
     
     trained_models = {}
     retrain_interval = 5
     
+    # 预计算所有期的ML信号（避免重复计算）
+    ml_signals_cache = {}
+    if use_ml_signal:
+        for idx in range(train_window, len(draws)):
+            signal_data = draws[:idx]  # 使用当期之前的所有数据
+            ml_signals_cache[idx] = calculate_ml_signals(signal_data)
+    
     for idx in range(lookback):
         i = train_window + idx
         test_data = draws[i]
+        
+        # ========== ML信号强度判断 ==========
+        if use_ml_signal:
+            signal_strength = ml_signals_cache.get(i, {}).get('signal_strength', 0)
+            if signal_strength < signal_threshold:
+                skip_periods += 1
+                continue  # 信号不足，本期不投注
+            bet_periods += 1
+        else:
+            bet_periods += 1
         
         # ========== 根据模式设置种子 ==========
         if seed_mode == "date":
@@ -3782,13 +3808,11 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
                 trained_models[model_key] = bets
             
             elif method_name == "方法5":
-                # ========== 方法5：复用方法1-4的结果 ==========
-                # 先生成方法1-4的投注（如果还没有缓存）
+                # 方法5：复用方法1-4的结果
                 methods_results = {}
                 for m in ["方法1", "方法2", "方法3", "方法4"]:
                     m_key = f"{m}_{i // retrain_interval}"
                     if m_key not in trained_models:
-                        # 临时生成该方法的结果（使用相同的训练数据）
                         if m == "方法1":
                             g = Method1NewRule(train_data)
                             b = g.generate_bets(num_bets, "7+1")
@@ -3831,7 +3855,6 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
                 red_counter = Counter(all_reds)
                 blue_counter = Counter(all_blues)
                 
-                # 取频率最高的7红+2蓝
                 top_reds = [num for num, _ in red_counter.most_common(7)]
                 top_reds.sort()
                 top_blues = [num for num, _ in blue_counter.most_common(2)]
@@ -3846,7 +3869,6 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
                 trained_models[model_key] = bets
             
             else:
-                # 默认使用方法1
                 generator = Method1NewRule(train_data)
                 bets = generator.generate_bets(num_bets, "7+1")
                 blue_system = BlueScoreSystem(train_data)
@@ -3887,7 +3909,7 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
     periods = lookback
     net = total_prize - total_cost
     roi = (net / total_cost) * 100 if total_cost > 0 else 0
-    win_rate = (win_count / periods) * 100 if periods > 0 else 0
+    win_rate = (win_count / bet_periods) * 100 if bet_periods > 0 else 0
     
     return {
         "roi": roi,
@@ -3896,6 +3918,8 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
         "net": net,
         "win_rate": win_rate,
         "periods": periods,
+        "bet_periods": bet_periods,
+        "skip_periods": skip_periods,
         "train_window_used": train_window,
         "prize_breakdown": prize_breakdown
     }
@@ -4538,7 +4562,7 @@ if st.session_state.get('generated_bets'):
     st.info(f"💬 **AI解读**：{ai_suggestion.get('summary', '祝您好运！')}")
 
 st.markdown("---")
-
+#-------------
 # ==================== ROI回测分析 ====================
 with st.expander("📈 ROI回测分析"):
     st.markdown("基于历史数据的回测分析（仅供参考）")
@@ -4568,7 +4592,12 @@ with st.expander("📈 ROI回测分析"):
         "选择种子模式",
         options=["日期+21:15（每期用自己的开奖日期）", "用户输入固定种子", "机器自动产生（每期随机）"],
         index=0,
-        key="seed_mode_radio"
+        key="seed_mode_radio",
+        help="""
+        - 日期+21:15：每期使用自己的开奖日期+21:15作为种子（可重现，模拟真实场景）
+        - 用户输入固定种子：整个回测使用同一个固定种子值（用于比较不同种子效果）
+        - 机器自动产生：每期随机生成种子（模拟完全随机情况）
+        """
     )
     
     fixed_seed_value = 1
@@ -4579,8 +4608,35 @@ with st.expander("📈 ROI回测分析"):
             max_value=10000,
             value=7,
             step=1,
-            key="fixed_seed_value"
+            key="fixed_seed_value",
+            help="建议尝试: 1, 3, 5, 7, 9, 10, 11"
         )
+    
+    # ========== 新增：ML信号过滤 ==========
+    st.markdown("**🧠 ML信号过滤**")
+    col_signal1, col_signal2 = st.columns(2)
+    with col_signal1:
+        use_ml_signal = st.checkbox(
+            "跟随ML智能分析投注",
+            value=False,
+            key="use_ml_signal",
+            help="仅当信号强度≥阈值时才投注，低于阈值则不买"
+        )
+    with col_signal2:
+        signal_threshold = st.slider(
+            "信号强度阈值",
+            min_value=0,
+            max_value=100,
+            value=50,
+            step=5,
+            key="signal_threshold",
+            disabled=not use_ml_signal,
+            help="信号强度≥此值时投注，否则观望"
+        )
+    
+    # 显示信号强度说明
+    if use_ml_signal:
+        st.caption("💡 信号强度说明：≥60强烈推荐 | 40-59谨慎 | 20-39观望 | <20不买")
     
     # 映射到函数参数
     if seed_mode_option == "日期+21:15（每期用自己的开奖日期）":
@@ -4594,6 +4650,7 @@ with st.expander("📈 ROI回测分析"):
         if backtest_periods <= 0:
             st.error("请选择大于0的回测期数")
         else:
+            # 显示当前设置
             if seed_mode == "date":
                 st.info("🔬 种子模式：每期使用自己的开奖日期+21:15")
             elif seed_mode == "fixed":
@@ -4601,13 +4658,19 @@ with st.expander("📈 ROI回测分析"):
             else:
                 st.info("🔬 种子模式：每期随机生成种子")
             
+            if use_ml_signal:
+                st.info(f"🧠 ML信号过滤：已启用，阈值={signal_threshold}%，信号不足时不投注")
+            else:
+                st.info("🧠 ML信号过滤：未启用，每期都投注")
+            
             with st.spinner(f"正在回测 {backtest_periods} 期，请稍候..."):
                 results_data = []
                 
-                # ========== 方法1：新规则系统 v15.0 ==========
+                # 方法1：新规则系统
                 result = backtest_roi(
                     draws, "方法1", backtest_bets, backtest_periods,
-                    seed_mode=seed_mode, fixed_seed_value=fixed_seed_value
+                    seed_mode=seed_mode, fixed_seed_value=fixed_seed_value,
+                    use_ml_signal=use_ml_signal, signal_threshold=signal_threshold
                 )
                 results_data.append({
                     "方法": "方法1:新规则系统(v15.0)",
@@ -4615,13 +4678,16 @@ with st.expander("📈 ROI回测分析"):
                     "总成本": int(result.get('total_cost', 0)),
                     "总奖金": int(result.get('total_prize', 0)),
                     "净收益": int(result.get('net', 0)),
-                    "中奖率": float(result.get('win_rate', 0))
+                    "中奖率": float(result.get('win_rate', 0)),
+                    "投注期数": result.get('bet_periods', 0),
+                    "跳过期数": result.get('skip_periods', 0)
                 })
                 
-                # ========== 方法2：胆拖混合 ==========
+                # 方法2：胆拖混合
                 result = backtest_roi(
                     draws, "方法2", backtest_bets, backtest_periods,
-                    seed_mode=seed_mode, fixed_seed_value=fixed_seed_value
+                    seed_mode=seed_mode, fixed_seed_value=fixed_seed_value,
+                    use_ml_signal=use_ml_signal, signal_threshold=signal_threshold
                 )
                 results_data.append({
                     "方法": "方法2:胆拖混合",
@@ -4629,13 +4695,16 @@ with st.expander("📈 ROI回测分析"):
                     "总成本": int(result.get('total_cost', 0)),
                     "总奖金": int(result.get('total_prize', 0)),
                     "净收益": int(result.get('net', 0)),
-                    "中奖率": float(result.get('win_rate', 0))
+                    "中奖率": float(result.get('win_rate', 0)),
+                    "投注期数": result.get('bet_periods', 0),
+                    "跳过期数": result.get('skip_periods', 0)
                 })
                 
-                # ========== 方法3：LightGBM ==========
+                # 方法3：LightGBM
                 result = backtest_roi(
                     draws, "方法3", backtest_bets, backtest_periods,
-                    seed_mode=seed_mode, fixed_seed_value=fixed_seed_value
+                    seed_mode=seed_mode, fixed_seed_value=fixed_seed_value,
+                    use_ml_signal=use_ml_signal, signal_threshold=signal_threshold
                 )
                 results_data.append({
                     "方法": "方法3:LightGBM",
@@ -4643,13 +4712,16 @@ with st.expander("📈 ROI回测分析"):
                     "总成本": int(result.get('total_cost', 0)),
                     "总奖金": int(result.get('total_prize', 0)),
                     "净收益": int(result.get('net', 0)),
-                    "中奖率": float(result.get('win_rate', 0))
+                    "中奖率": float(result.get('win_rate', 0)),
+                    "投注期数": result.get('bet_periods', 0),
+                    "跳过期数": result.get('skip_periods', 0)
                 })
                 
-                # ========== 方法4：XGBoost ==========
+                # 方法4：XGBoost
                 result = backtest_roi(
                     draws, "方法4", backtest_bets, backtest_periods,
-                    seed_mode=seed_mode, fixed_seed_value=fixed_seed_value
+                    seed_mode=seed_mode, fixed_seed_value=fixed_seed_value,
+                    use_ml_signal=use_ml_signal, signal_threshold=signal_threshold
                 )
                 results_data.append({
                     "方法": "方法4:XGBoost",
@@ -4657,13 +4729,16 @@ with st.expander("📈 ROI回测分析"):
                     "总成本": int(result.get('total_cost', 0)),
                     "总奖金": int(result.get('total_prize', 0)),
                     "净收益": int(result.get('net', 0)),
-                    "中奖率": float(result.get('win_rate', 0))
+                    "中奖率": float(result.get('win_rate', 0)),
+                    "投注期数": result.get('bet_periods', 0),
+                    "跳过期数": result.get('skip_periods', 0)
                 })
                 
-                # ========== 方法5：综合模式（新增） ==========
+                # 方法5：综合模式
                 result = backtest_roi(
                     draws, "方法5", backtest_bets, backtest_periods,
-                    seed_mode=seed_mode, fixed_seed_value=fixed_seed_value
+                    seed_mode=seed_mode, fixed_seed_value=fixed_seed_value,
+                    use_ml_signal=use_ml_signal, signal_threshold=signal_threshold
                 )
                 results_data.append({
                     "方法": "方法5:综合模式",
@@ -4671,11 +4746,14 @@ with st.expander("📈 ROI回测分析"):
                     "总成本": int(result.get('total_cost', 0)),
                     "总奖金": int(result.get('total_prize', 0)),
                     "净收益": int(result.get('net', 0)),
-                    "中奖率": float(result.get('win_rate', 0))
+                    "中奖率": float(result.get('win_rate', 0)),
+                    "投注期数": result.get('bet_periods', 0),
+                    "跳过期数": result.get('skip_periods', 0)
                 })
                 
                 df_results = pd.DataFrame(results_data)
                 
+                # 显示结果表格
                 st.dataframe(
                     df_results.style.format({
                         'ROI': '{:.1f}%',
@@ -4688,7 +4766,7 @@ with st.expander("📈 ROI回测分析"):
                     hide_index=True
                 )
                 
-                # 找出最佳表现的方法
+                # 找出最佳表现的方法（按ROI排序）
                 best_method = results_data[0]["方法"]
                 best_roi = results_data[0]["ROI"]
                 for r in results_data:
@@ -4697,7 +4775,13 @@ with st.expander("📈 ROI回测分析"):
                         best_method = r["方法"]
                 
                 st.success(f"🏆 最佳表现: {best_method} (ROI: {best_roi:.1f}%)")
-                st.caption(f"📅 基于最近{backtest_periods}期回测，每组{backtest_bets}注")
+                
+                # 显示投注统计
+                if use_ml_signal:
+                    total_skip = results_data[0]["跳过期数"]
+                    st.caption(f"📊 信号过滤：{backtest_periods}期中，{total_skip}期因信号不足未投注（节省成本约{total_skip * backtest_bets * 14}元）")
+                
+                st.caption(f"📅 基于最近{backtest_periods}期回测，每组{backtest_bets}注（7+1复式）")
 
 # ==================== 多期查奖 ====================
 st.subheader("🔍 多期查奖")
