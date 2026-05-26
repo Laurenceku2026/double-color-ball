@@ -3415,37 +3415,37 @@ class Method1NewRule:
     """
     #--------------------
     def __init__(self, draws: List[Dict]):
-    # ========== 固定使用最近100期数据 ==========
-    if len(draws) > 100:
-        self.draws = draws[-100:]
-    else:
-        self.draws = draws
+        # ========== 固定使用最近100期数据 ==========
+        if len(draws) > 100:
+            self.draws = draws[-100:]
+        else:
+            self.draws = draws
+        
+        self.red_scores = None
+        self.normal_pool = None
+        self.cold_pool = None
+        
+        # 可调节参数（支持外部修改）
+        self.normal_threshold = 50
+        self.normal_count_layer1 = 5
+        self.cold_count_layer1 = 1
+        self.normal_count_layer2 = 4
+        self.cold_count_layer2 = 2
+        self.temp_normal = 0.8
+        self.temp_cold = 1.2
+        self.sum_tolerance = 12
+        self.require_consecutive = True
+        self.max_attempts_layer1 = 500
+        self.max_attempts_layer2 = 300
     
-    self.red_scores = None
-    self.normal_pool = None
-    self.cold_pool = None
-    
-    # 可调节参数（支持外部修改）
-    self.normal_threshold = 50
-    self.normal_count_layer1 = 5
-    self.cold_count_layer1 = 1
-    self.normal_count_layer2 = 4
-    self.cold_count_layer2 = 2
-    self.temp_normal = 0.8
-    self.temp_cold = 1.2
-    self.sum_tolerance = 12
-    self.require_consecutive = True
-    self.max_attempts_layer1 = 500
-    self.max_attempts_layer2 = 300
-    
-    # ========== 新增：加分项开关（默认全部开启） ==========
-    self.enable_freq_acc = True          # 频率加速度 Δf (+25)
-    self.enable_density_trend = True     # 疏转密 trend (+20)
-    self.enable_absence_bonus = True     # 遗漏13-20期 (+30)
-    self.enable_alternating = True       # 隔期模式 (+12)
-    
-    # 计算评分和分池
-    self._calculate_scores_and_pools()
+        # ========== 新增：加分项开关（默认全部开启） ==========
+        self.enable_freq_acc = True          # 频率加速度 Δf (+25)
+        self.enable_density_trend = True     # 疏转密 trend (+20)
+        self.enable_absence_bonus = True     # 遗漏13-20期 (+30)
+        self.enable_alternating = True       # 隔期模式 (+12)
+        
+        # 计算评分和分池
+        self._calculate_scores_and_pools()
     
     def _calculate_scores_and_pools(self):
         """计算所有红球的综合评分并分池"""
