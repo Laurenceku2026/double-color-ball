@@ -4458,60 +4458,103 @@ st.markdown("---")
 # ==================== 冷热码分析（新规则系统 v15.0） ====================
 st.subheader("🔥 冷热码分析（基于综合评分）")
 
-st.caption("📊 基于最近100期数据，使用综合评分体系（基础分+频率加速度+疏转密+遗漏加分+隔期加分）")
+st.caption("📊 基于最近100期数据，使用综合评分体系（基础分+可选加分项）")
 
-# 获取新系统的评分
-red_scores = get_red_scores_by_new_system(draws)
+# 获取当前加分项开关状态（从高级参数面板读取）
+enable_freq_acc = st.session_state.get('enable_freq_acc', True)
+enable_density_trend = st.session_state.get('enable_density_trend', True)
+enable_absence_bonus = st.session_state.get('enable_absence_bonus', True)
+enable_alternating = st.session_state.get('enable_alternating', True)
+
+# 显示当前评分规则状态
+bonus_status = []
+if enable_freq_acc:
+    bonus_status.append("频率加速度")
+if enable_density_trend:
+    bonus_status.append("疏转密")
+if enable_absence_bonus:
+    bonus_status.append("遗漏13-20期")
+if enable_alternating:
+    bonus_status.append("隔期模式")
+
+if bonus_status:
+    st.caption(f"✅ 当前启用加分项: {' + '.join(bonus_status)}")
+else:
+    st.caption("⚠️ 当前仅使用基础分（遗漏值），未启用任何加分项")
+
+# 创建评分实例并设置开关状态
+scorer = Method1NewRule(draws)
+scorer.enable_freq_acc = enable_freq_acc
+scorer.enable_density_trend = enable_density_trend
+scorer.enable_absence_bonus = enable_absence_bonus
+scorer.enable_alternating = enable_alternating
+
+# 重新计算评分（确保使用最新的开关状态）
+scorer._calculate_scores_and_pools()
+red_scores = scorer.red_scores
+
+# 计算蓝球评分
 blue_scores = get_blue_scores_by_new_system(draws)
 
 # 红球评分排序
 sorted_reds = sorted(red_scores.items(), key=lambda x: x[1], reverse=True)
-hot_reds_top10 = sorted_reds[:16]
-cold_reds_bottom10 = sorted_reds[-16:]
+hot_reds_top16 = sorted_reds[:16]      # 热门红球 Top 16
+cold_reds_bottom16 = sorted_reds[-16:] # 冷门红球 Bottom 16
 
 # 蓝球评分排序
 sorted_blues = sorted(blue_scores.items(), key=lambda x: x[1], reverse=True)
-hot_blues_top10 = sorted_blues[:16]
+hot_blues_top16 = sorted_blues[:16]    # 篮球热度 Top 16
 
 # 并排显示3列
 col1, col2, col3 = st.columns(3)
 
-# 辅助函数：生成居中HTML表格
-def make_centered_table(headers, rows):
-    """生成居中对齐的HTML表格"""
-    html = '<table style="width:100%; text-align:center; border-collapse:collapse;">'
-    # 表头
-    html += '<tr style="background-color:#f0f0f0;">'
-    for h in headers:
-        html += f'<th style="text-align:center; padding:8px;">{h}</th>'
-    html += '</tr>'
-    # 数据行
-    for row in rows:
-        html += '<tr>'
-        for cell in row:
-            html += f'<td style="text-align:center; padding:6px;">{cell}</td>'
-        html += '</tr>'
-    html += '</table>'
-    return html
-
 with col1:
     st.markdown("**🔥 热门红球 Top 16**")
-    # 准备数据
-    hot_reds_rows = [[f"{num:02d}", score] for num, score in hot_reds_top10]
-    hot_reds_html = make_centered_table(['号码', '评分'], hot_reds_rows)
-    st.markdown(hot_reds_html, unsafe_allow_html=True)
+    hot_reds_df = pd.DataFrame([
+        {'号码': f"{num:02d}", '评分': score}
+        for num, score in hot_reds_top16
+    ])
+    st.dataframe(
+        hot_reds_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            '号码': st.column_config.TextColumn('号码', width='small'),
+            '评分': st.column_config.NumberColumn('评分', width='small')
+        }
+    )
 
 with col2:
     st.markdown("**❄️ 冷门红球 Bottom 16**")
-    cold_reds_rows = [[f"{num:02d}", score] for num, score in cold_reds_bottom10]
-    cold_reds_html = make_centered_table(['号码', '评分'], cold_reds_rows)
-    st.markdown(cold_reds_html, unsafe_allow_html=True)
+    cold_reds_df = pd.DataFrame([
+        {'号码': f"{num:02d}", '评分': score}
+        for num, score in cold_reds_bottom16
+    ])
+    st.dataframe(
+        cold_reds_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            '号码': st.column_config.TextColumn('号码', width='small'),
+            '评分': st.column_config.NumberColumn('评分', width='small')
+        }
+    )
 
 with col3:
     st.markdown("**💙 篮球热度 Top 16**")
-    hot_blues_rows = [[f"{num:02d}", score] for num, score in hot_blues_top10]
-    hot_blues_html = make_centered_table(['蓝球', '评分'], hot_blues_rows)
-    st.markdown(hot_blues_html, unsafe_allow_html=True)
+    hot_blues_df = pd.DataFrame([
+        {'蓝球': f"{num:02d}", '评分': score}
+        for num, score in hot_blues_top16
+    ])
+    st.dataframe(
+        hot_blues_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            '蓝球': st.column_config.TextColumn('蓝球', width='small'),
+            '评分': st.column_config.NumberColumn('评分', width='small')
+        }
+    )
 
 st.markdown("---")
 
