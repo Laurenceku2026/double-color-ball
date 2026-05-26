@@ -1009,20 +1009,7 @@ def show_admin_page():
     
     # 加载现有数据
     current_draws = st.session_state.get('draws_loaded', [])
-    # 在显示数据编辑器之前，保存原始数据
-    if 'original_draws' not in st.session_state:
-        st.session_state['original_draws'] = current_draws.copy()
     
-    # 在增量同步保存时
-    if incremental_submitted:
-        # 获取编辑前的原始数据
-        original_draws = st.session_state.get('original_draws', [])
-        
-        # 调用增量同步函数，传入原始数据
-        result = incremental_sync_draws(new_draws, original_draws)
-        
-        # 保存后更新原始数据
-        st.session_state['original_draws'] = new_draws.copy()
     # 构建 DataFrame
     if current_draws:
         display_draws = sorted(current_draws, key=lambda x: x.get('period', 0), reverse=True)
@@ -1051,7 +1038,7 @@ def show_admin_page():
     else:
         df = pd.DataFrame(columns=columns)
     
-    # 配置列类型
+    # 配置列类型（期号强制为文本）
     column_config = {
         "期号": st.column_config.TextColumn("期号", required=True),
         "开奖日期": st.column_config.TextColumn("开奖日期"),
@@ -1069,7 +1056,7 @@ def show_admin_page():
         "二等奖奖金(元)": st.column_config.NumberColumn("二等奖奖金(元)", step=1),
         "总投注额(元)": st.column_config.NumberColumn("总投注额(元)", step=1),
     }
-        
+    
     # 显示数据量统计
     st.info(f"📊 当前数据量: {len(current_draws)} 期")
     
@@ -1108,6 +1095,7 @@ def show_admin_page():
         with col_save2:
             incremental_submitted = st.form_submit_button("🔄 增量同步保存", use_container_width=True)
         
+        # ========== 全量覆盖保存 ==========
         if overwrite_submitted:
             if edited_df is None or len(edited_df) == 0:
                 st.error("没有数据可保存")
@@ -1121,7 +1109,12 @@ def show_admin_page():
                             if pd.isna(row['期号']) or row['期号'] == 0:
                                 continue
                             
-                            period = int(row['期号'])
+                            # ========== 期号统一转为字符串 ==========
+                            period_str = str(row['期号']).strip()
+                            if '.' in period_str:
+                                period_str = period_str.split('.')[0]
+                            period = period_str
+                            
                             date = str(row['开奖日期']) if pd.notna(row['开奖日期']) and row['开奖日期'] != '' else None
                             
                             reds = [
@@ -1177,6 +1170,7 @@ def show_admin_page():
                     else:
                         st.error("没有有效数据可保存")
         
+        # ========== 增量同步保存 ==========
         if incremental_submitted:
             if edited_df is None or len(edited_df) == 0:
                 st.error("没有数据可同步")
@@ -1190,7 +1184,12 @@ def show_admin_page():
                             if pd.isna(row['期号']) or row['期号'] == 0:
                                 continue
                             
-                            period = int(row['期号'])
+                            # ========== 期号统一转为字符串 ==========
+                            period_str = str(row['期号']).strip()
+                            if '.' in period_str:
+                                period_str = period_str.split('.')[0]
+                            period = period_str
+                            
                             date = str(row['开奖日期']) if pd.notna(row['开奖日期']) and row['开奖日期'] != '' else None
                             
                             reds = [
@@ -1245,6 +1244,54 @@ def show_admin_page():
                         st.rerun()
                     else:
                         st.error("没有有效数据可同步")
+    
+    st.markdown("---")
+    
+    # ==================== Excel上传区域 ====================
+    st.subheader("📎 Excel文件上传")
+    st.caption("格式：期号、开奖日期、红1-6、蓝球、奖池奖金(元)、一等奖注数、一等奖奖金(元)、二等奖注数、二等奖奖金(元)、总投注额(元)")
+    
+    uploaded_file = st.file_uploader(
+        "选择Excel文件",
+        type=['xlsx', 'xls'],
+        key="excel_uploader_admin",
+        help="上传Excel文件"
+    )
+    
+    if uploaded_file is not None:
+        with st.spinner("正在解析Excel文件..."):
+            excel_draws = parse_excel_file(uploaded_file)
+            if excel_draws and len(excel_draws) > 0:
+                st.success(f"✅ 成功解析 {len(excel_draws)} 期数据")
+                
+                # 预览
+                preview_data = []
+                for d in excel_draws[:10]:
+                    reds = d.get('reds', [])
+                    reds_str = ','.join(f"{r:02d}" for r in reds)
+                    preview_data.append({
+                        '期号': d.get('period'),
+                        '开奖日期': str(d.get('date', ''))[:10] if d.get('date') else '',
+                        '红球': reds_str,
+                        '蓝球': f"{d.get('blue', 0):02d}"
+                    })
+                st.dataframe(pd.DataFrame(preview_data), use_container_width=True, hide_index=True)
+                
+                col_confirm, col_cancel = st.columns(2)
+                with col_confirm:
+                    if st.button("✅ 确认全量覆盖", type="primary"):
+                        excel_draws = fill_missing_with_history(excel_draws)
+                        excel_draws.sort(key=lambda x: x.get('period', 0))
+                        saved = save_draws_to_supabase(excel_draws, overwrite=True)
+                        if saved > 0:
+                            st.session_state['draws_loaded'] = excel_draws
+                            st.success(f"保存 {saved} 期数据成功！")
+                            st.rerun()
+                with col_cancel:
+                    if st.button("❌ 取消"):
+                        st.rerun()
+            else:
+                st.error("解析失败，请检查文件格式")
     
     st.markdown("---")
     
