@@ -4462,12 +4462,12 @@ blue_scores = get_blue_scores_by_new_system(draws)
 
 # 红球评分排序
 sorted_reds = sorted(red_scores.items(), key=lambda x: x[1], reverse=True)
-hot_reds_top10 = sorted_reds[:10]
-cold_reds_bottom10 = sorted_reds[-10:]
+hot_reds_top10 = sorted_reds[:16]
+cold_reds_bottom10 = sorted_reds[-16:]
 
 # 蓝球评分排序
 sorted_blues = sorted(blue_scores.items(), key=lambda x: x[1], reverse=True)
-hot_blues_top10 = sorted_blues[:10]
+hot_blues_top10 = sorted_blues[:16]
 
 # 并排显示3列
 col1, col2, col3 = st.columns(3)
@@ -4491,20 +4491,20 @@ def make_centered_table(headers, rows):
     return html
 
 with col1:
-    st.markdown("**🔥 热门红球 Top 10**")
+    st.markdown("**🔥 热门红球 Top 16**")
     # 准备数据
     hot_reds_rows = [[f"{num:02d}", score] for num, score in hot_reds_top10]
     hot_reds_html = make_centered_table(['号码', '评分'], hot_reds_rows)
     st.markdown(hot_reds_html, unsafe_allow_html=True)
 
 with col2:
-    st.markdown("**❄️ 冷门红球 Bottom 10**")
+    st.markdown("**❄️ 冷门红球 Bottom 16**")
     cold_reds_rows = [[f"{num:02d}", score] for num, score in cold_reds_bottom10]
     cold_reds_html = make_centered_table(['号码', '评分'], cold_reds_rows)
     st.markdown(cold_reds_html, unsafe_allow_html=True)
 
 with col3:
-    st.markdown("**💙 篮球热度 Top 10**")
+    st.markdown("**💙 篮球热度 Top 16**")
     hot_blues_rows = [[f"{num:02d}", score] for num, score in hot_blues_top10]
     hot_blues_html = make_centered_table(['蓝球', '评分'], hot_blues_rows)
     st.markdown(hot_blues_html, unsafe_allow_html=True)
