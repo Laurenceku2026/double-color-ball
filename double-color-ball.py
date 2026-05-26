@@ -1791,6 +1791,97 @@ def get_target_sum_sine(draws: List[Dict], tolerance: int = 12) -> Tuple[int, in
     target = sine_fit_predict_sum(recent_sums)
     return target, tolerance
 #---------------------
+# ==================== 7期移动平均和值预测 ====================
+
+def get_target_sum_range(draws: List[Dict], window: int = 7, percentage: float = 0.10) -> Tuple[int, int]:
+    """
+    基于移动平均的红球和值范围预测
+    
+    参数:
+        window: 移动平均窗口期（默认7期）
+        percentage: 范围百分比（默认10%）
+    
+    返回:
+        (下限, 上限)
+    """
+    if len(draws) < window:
+        return 80, 125  # 默认范围
+    
+    recent_sums = []
+    for draw in draws[-window:]:
+        reds = draw.get('reds', [])
+        if reds:
+            recent_sums.append(sum(reds))
+    
+    if not recent_sums:
+        return 80, 125
+    
+    mean_val = np.mean(recent_sums)
+    lower = max(50, int(mean_val * (1 - percentage)))
+    upper = min(175, int(mean_val * (1 + percentage)))
+    
+    return lower, upper
+
+
+def generate_target_sum_by_range(draws: List[Dict]) -> int:
+    """在预测范围内随机生成一个和值"""
+    lower, upper = get_target_sum_range(draws)
+    return random.randint(lower, upper)
+
+
+# ==================== 7期移动平均蓝球预测（环形） ====================
+
+def get_blue_range(draws: List[Dict], window: int = 7, radius: int = 3) -> List[int]:
+    """
+    基于移动平均的蓝球环形范围预测
+    
+    参数:
+        window: 移动平均窗口期（默认7期）
+        radius: 半径（默认3，共7个号码）
+    
+    返回:
+        候选蓝球列表（环形，7个号码）
+    """
+    if len(draws) < window:
+        return list(range(1, 17))  # 默认全部
+    
+    recent_blues = []
+    for draw in draws[-window:]:
+        blue = draw.get('blue', 0)
+        if 1 <= blue <= 16:
+            recent_blues.append(blue)
+    
+    if not recent_blues:
+        return list(range(1, 17))
+    
+    center = int(round(np.mean(recent_blues)))
+    
+    # 环形生成 ±radius 范围内的号码
+    candidates = []
+    for offset in range(-radius, radius + 1):
+        num = center + offset
+        # 环形处理：1-16
+        if num < 1:
+            num = 16 + num  # num=-1 → 15, num=0 → 16
+        elif num > 16:
+            num = num - 16  # num=17 → 1, num=18 → 2
+        candidates.append(num)
+    
+    # 去重并保持顺序
+    seen = set()
+    unique_candidates = []
+    for num in candidates:
+        if num not in seen:
+            seen.add(num)
+            unique_candidates.append(num)
+    
+    return unique_candidates
+
+
+def select_blue_by_range(draws: List[Dict]) -> int:
+    """从预测范围中随机选择一个蓝球"""
+    candidates = get_blue_range(draws)
+    return random.choice(candidates)
 # ==================== 蓝球正弦拟合预测 ====================
 
 def sine_fit_predict_blue(blue_sequence: List[int]) -> int:
@@ -2459,9 +2550,20 @@ class Method2DanTuo:
         return [num for num, _ in sorted_nums[:n]]
     #-----
     def _get_target_sum(self) -> Tuple[int, int]:
-        """正弦拟合预测和值（使用公共函数）"""
-        target, _ = get_target_sum_sine(self.draws, self.sum_tolerance)
-        return target, self.sum_tolerance
+        """根据用户选择的预测方法返回和值目标"""
+        import streamlit as st
+        
+        # 从 session_state 获取用户选择的预测方法
+        sum_method = st.session_state.get('sum_predict_method', '7期均值 (±10%)')
+        
+        if sum_method == "正弦拟合":
+            target, _ = get_target_sum_sine(self.draws, self.sum_tolerance)
+            return target, self.sum_tolerance
+        else:
+            # 7期均值范围预测，随机生成和值
+            lower, upper = get_target_sum_range(self.draws)
+            target = random.randint(lower, upper)
+            return target, self.sum_tolerance
     
     def _has_consecutive(self, reds: List[int]) -> bool:
         """检查是否有连号"""
@@ -3972,26 +4074,35 @@ class BlueScoreSystem:
         score += self.get_sine_fit_bonus(num)
         
         return score
-    
+    #--------------
     def select_blue(self) -> int:
         """
         选择蓝球
-        所有16个蓝球按总分Softmax概率抽取
+        根据用户选择的预测方法决定：正弦拟合+评分 或 7期均值环形范围
         """
-        # 计算所有蓝球的评分
-        all_blues = list(range(1, 17))
-        scores = {}
-        for num in all_blues:
-            scores[num] = self.calculate_total_score(num)
+        import streamlit as st
         
-        # Softmax概率抽取
-        score_list = [scores[num] for num in all_blues]
-        exp_scores = np.exp(np.array(score_list) / self.temperature)
-        probs = exp_scores / np.sum(exp_scores)
+        # 从 session_state 获取用户选择的预测方法
+        blue_method = st.session_state.get('blue_predict_method', '7期均值 (±3环形)')
         
-        selected = np.random.choice(all_blues, p=probs)
-        
-        return int(selected)
+        if blue_method == "正弦拟合":
+            # 原有的正弦拟合 + 评分系统
+            all_blues = list(range(1, 17))
+            scores = {}
+            for num in all_blues:
+                scores[num] = self.calculate_total_score(num)
+            
+            # Softmax概率抽取
+            score_list = [scores[num] for num in all_blues]
+            exp_scores = np.exp(np.array(score_list) / self.temperature)
+            probs = exp_scores / np.sum(exp_scores)
+            
+            selected = np.random.choice(all_blues, p=probs)
+            return int(selected)
+        else:
+            # 7期均值环形范围预测，随机抽取
+            candidates = get_blue_range(self.draws, window=7, radius=3)
+            return random.choice(candidates)
 
 
 # ============================================================
@@ -4078,9 +4189,12 @@ def get_blue_scores_by_new_system(draws: List[Dict]) -> Dict[int, int]:
 
 def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookback: int = 10,
                  seed_mode: str = "date", fixed_seed_value: int = 1,
-                 use_ml_signal: bool = False, signal_threshold: int = 50) -> Dict:
+                 use_ml_signal: bool = False, signal_threshold: int = 50,
+                 use_dynamic_bets: bool = True,
+                 sum_predict_method: str = '7期均值 (±10%)',
+                 blue_predict_method: str = '7期均值 (±3环形)') -> Dict:
     """
-    优化版ROI回测 - 支持3种种子模式 + ML信号过滤
+    优化版ROI回测 - 支持3种种子模式 + ML信号过滤 + 动态投注 + 预测方法选择
     
     参数:
         method_name: "方法1", "方法2", "方法3", "方法4", "方法5"
@@ -4088,7 +4202,20 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
         fixed_seed_value: 当 seed_mode="fixed" 时使用的种子值
         use_ml_signal: 是否使用ML信号过滤（True/False）
         signal_threshold: 信号强度阈值（0-100），低于此值不投注
+        use_dynamic_bets: 是否根据信号强度动态调整投注组数
+        sum_predict_method: 和值预测方法 ('正弦拟合' 或 '7期均值 (±10%)')
+        blue_predict_method: 蓝球预测方法 ('正弦拟合' 或 '7期均值 (±3环形)')
     """
+    import streamlit as st
+    
+    # 保存原始 session_state 值
+    original_sum_method = st.session_state.get('sum_predict_method', '7期均值 (±10%)')
+    original_blue_method = st.session_state.get('blue_predict_method', '7期均值 (±3环形)')
+    
+    # 临时设置为回测使用的方法
+    st.session_state['sum_predict_method'] = sum_predict_method
+    st.session_state['blue_predict_method'] = blue_predict_method
+    
     method_seed_offset = {
         "方法1": 100,
         "方法2": 200,
@@ -4102,6 +4229,9 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
         train_window = max(TRAIN_WINDOWS.values())
     
     if len(draws) < train_window + lookback:
+        # 恢复原始设置
+        st.session_state['sum_predict_method'] = original_sum_method
+        st.session_state['blue_predict_method'] = original_blue_method
         return {
             "roi": 0, "total_cost": 0, "total_prize": 0, "net": 0,
             "win_rate": 0, "periods": 0, "bet_periods": 0, "skip_periods": 0,
@@ -4111,8 +4241,8 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
     total_cost = 0
     total_prize = 0
     win_count = 0
-    bet_periods = 0      # 实际投注的期数
-    skip_periods = 0     # 因信号不足跳过的期数
+    bet_periods = 0
+    skip_periods = 0
     prize_breakdown = {"first": 0, "second": 0, "third": 0, "fourth": 0, "fifth": 0, "sixth": 0, "fuyun": 0}
     
     trained_models = {}
@@ -4122,208 +4252,217 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
     ml_signals_cache = {}
     if use_ml_signal:
         for idx in range(train_window, len(draws)):
-            signal_data = draws[:idx]  # 使用当期之前的所有数据
+            signal_data = draws[:idx]
             ml_signals_cache[idx] = calculate_ml_signals(signal_data)
     
-    for idx in range(lookback):
-        i = train_window + idx
-        test_data = draws[i]
-        
-        # ========== ML信号强度判断 ==========
-        if use_ml_signal:
-            signal_strength = ml_signals_cache.get(i, {}).get('signal_strength', 0)
-            if signal_strength < signal_threshold:
-                skip_periods += 1
-                continue  # 信号不足，本期不投注
-            bet_periods += 1
-        else:
-            bet_periods += 1
-        
-        # ========== 根据模式设置种子 ==========
-        if seed_mode == "date":
-            test_date = test_data.get('date')
-            if test_date:
-                try:
-                    if isinstance(test_date, str):
-                        date_str = test_date[:10]
-                        if '-' in date_str:
-                            date_obj = datetime.strptime(date_str, '%Y-%m-%d')
-                        elif '/' in date_str:
-                            date_obj = datetime.strptime(date_str, '%Y/%m/%d')
-                        else:
-                            date_obj = datetime.now()
+    try:
+        for idx in range(lookback):
+            i = train_window + idx
+            test_data = draws[i]
+            
+            # ========== ML信号强度判断（支持动态投注） ==========
+            current_num_bets = num_bets
+            
+            if use_ml_signal:
+                signal_strength = ml_signals_cache.get(i, {}).get('signal_strength', 0)
+                
+                if use_dynamic_bets:
+                    # 动态调整投注组数
+                    if signal_strength >= 60:
+                        current_num_bets = 8
+                    elif signal_strength >= 40:
+                        current_num_bets = 4
+                    elif signal_strength >= 20:
+                        current_num_bets = 1
                     else:
-                        date_obj = test_date
-                    seed_val = int(datetime(date_obj.year, date_obj.month, date_obj.day, 21, 15).timestamp())
-                    seed_val += method_seed_offset
-                except Exception:
+                        current_num_bets = 0
+                else:
+                    if signal_strength < signal_threshold:
+                        skip_periods += 1
+                        continue
+            
+            if current_num_bets == 0:
+                skip_periods += 1
+                continue
+            
+            bet_periods += 1
+            
+            # ========== 根据模式设置种子 ==========
+            if seed_mode == "date":
+                test_date = test_data.get('date')
+                if test_date:
+                    try:
+                        if isinstance(test_date, str):
+                            date_str = test_date[:10]
+                            if '-' in date_str:
+                                date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+                            elif '/' in date_str:
+                                date_obj = datetime.strptime(date_str, '%Y/%m/%d')
+                            else:
+                                date_obj = datetime.now()
+                        else:
+                            date_obj = test_date
+                        seed_val = int(datetime(date_obj.year, date_obj.month, date_obj.day, 21, 15).timestamp())
+                        seed_val += method_seed_offset
+                    except Exception:
+                        seed_val = 42 + method_seed_offset + i
+                else:
                     seed_val = 42 + method_seed_offset + i
+            elif seed_mode == "fixed":
+                seed_val = fixed_seed_value + method_seed_offset
+            elif seed_mode == "random":
+                seed_val = random.randint(0, 1000000) + method_seed_offset
             else:
                 seed_val = 42 + method_seed_offset + i
-        elif seed_mode == "fixed":
-            seed_val = fixed_seed_value + method_seed_offset
-        elif seed_mode == "random":
-            seed_val = random.randint(0, 1000000) + method_seed_offset
-        else:
-            seed_val = 42 + method_seed_offset + i
-        
-        random.seed(seed_val)
-        np.random.seed(seed_val)
-        
-        # 每5期重新训练一次
-        model_key = f"{method_name}_{i // retrain_interval}"
-        
-        if model_key not in trained_models:
-            train_data = draws[i - train_window:i]
             
-            if method_name == "方法1":
-                generator = Method1NewRule(train_data)
-                bets = generator.generate_bets(num_bets, "7+1")
-                blue_system = BlueScoreSystem(train_data)
-                for bet in bets:
-                    blue = blue_system.select_blue()
-                    bet['blues'] = [blue]
-                    bet['blue'] = blue
-                trained_models[model_key] = bets
+            random.seed(seed_val)
+            np.random.seed(seed_val)
             
-            elif method_name == "方法2":
-                generator = Method2DanTuo(train_data)
-                bets = generator.generate_bets(num_bets, "7+1")
-                blue_system = BlueScoreSystem(train_data)
-                for bet in bets:
-                    blue = blue_system.select_blue()
-                    bet['blues'] = [blue]
-                    bet['blue'] = blue
-                trained_models[model_key] = bets
+            # 每5期重新训练一次
+            model_key = f"{method_name}_{i // retrain_interval}"
             
-            elif method_name == "方法3":
-                generator = Method3LightGBM(train_data)
-                generator.train()
-                bets = generator.generate_bets(num_bets, "7+1")
-                trained_models[model_key] = bets
-            
-            elif method_name == "方法4":
-                generator = Method4Ensemble(train_data)
-                generator.train()
-                bets = generator.generate_bets(num_bets, "7+1")
-                trained_models[model_key] = bets
-            
-            elif method_name == "方法5":
-                # 方法5：复用方法1-4的结果
-                methods_results = {}
-                for m in ["方法1", "方法2", "方法3", "方法4"]:
-                    m_key = f"{m}_{i // retrain_interval}"
-                    if m_key not in trained_models:
-                        if m == "方法1":
-                            g = Method1NewRule(train_data)
-                            b = g.generate_bets(num_bets, "7+1")
-                            bs = BlueScoreSystem(train_data)
-                            for bet in b:
-                                blue = bs.select_blue()
-                                bet['blues'] = [blue]
-                                bet['blue'] = blue
-                            trained_models[m_key] = b
-                        elif m == "方法2":
-                            g = Method2DanTuo(train_data)
-                            b = g.generate_bets(num_bets, "7+1")
-                            bs = BlueScoreSystem(train_data)
-                            for bet in b:
-                                blue = bs.select_blue()
-                                bet['blues'] = [blue]
-                                bet['blue'] = blue
-                            trained_models[m_key] = b
-                        elif m == "方法3":
-                            g = Method3LightGBM(train_data)
-                            g.train()
-                            b = g.generate_bets(num_bets, "7+1")
-                            trained_models[m_key] = b
-                        elif m == "方法4":
-                            g = Method4Ensemble(train_data)
-                            g.train()
-                            b = g.generate_bets(num_bets, "7+1")
-                            trained_models[m_key] = b
-                    methods_results[m] = trained_models[m_key]
+            if model_key not in trained_models:
+                train_data = draws[i - train_window:i]
                 
-                # 合并所有投注，统计频率
-                all_reds = []
-                all_blues = []
-                for m in ["方法1", "方法2", "方法3", "方法4"]:
-                    for bet in methods_results[m]:
-                        all_reds.extend(bet['reds'])
-                        all_blues.extend(bet.get('blues', [bet['blue']]))
+                if method_name == "方法1":
+                    generator = Method1NewRule(train_data)
+                    # 应用高级参数（如果存在）
+                    generator.normal_threshold = st.session_state.get('adv_normal_threshold', 50)
+                    generator.normal_count_layer1 = st.session_state.get('adv_normal_count', 5)
+                    generator.cold_count_layer1 = st.session_state.get('adv_cold_count', 1)
+                    generator.temp_normal = st.session_state.get('adv_normal_temp', 0.8)
+                    generator.temp_cold = st.session_state.get('adv_cold_temp', 1.2)
+                    generator.sum_tolerance = st.session_state.get('adv_sum_tolerance', 12)
+                    generator.require_consecutive = st.session_state.get('adv_require_consecutive', True)
+                    generator.max_attempts_layer1 = st.session_state.get('adv_max_attempts', 500)
+                    generator.max_attempts_layer2 = st.session_state.get('adv_max_attempts', 500) // 2
+                    bets = generator.generate_bets(current_num_bets, "7+1")
+                    # 蓝球已在方法内通过 session_state 选择
+                    trained_models[model_key] = bets
                 
-                from collections import Counter
-                red_counter = Counter(all_reds)
-                blue_counter = Counter(all_blues)
+                elif method_name == "方法2":
+                    generator = Method2DanTuo(train_data)
+                    bets = generator.generate_bets(current_num_bets, "7+1")
+                    trained_models[model_key] = bets
                 
-                top_reds = [num for num, _ in red_counter.most_common(7)]
-                top_reds.sort()
-                top_blues = [num for num, _ in blue_counter.most_common(2)]
+                elif method_name == "方法3":
+                    generator = Method3LightGBM(train_data)
+                    generator.train()
+                    bets = generator.generate_bets(current_num_bets, "7+1")
+                    trained_models[model_key] = bets
                 
-                bets = [{
-                    'reds': top_reds,
-                    'blues': top_blues,
-                    'blue': top_blues[0],
-                    'sum': sum(top_reds),
-                    'method': '方法5:综合模式'
-                }]
-                trained_models[model_key] = bets
-            
+                elif method_name == "方法4":
+                    generator = Method4Ensemble(train_data)
+                    generator.train()
+                    bets = generator.generate_bets(current_num_bets, "7+1")
+                    trained_models[model_key] = bets
+                
+                elif method_name == "方法5":
+                    # 方法5：复用方法1-4的结果
+                    methods_results = {}
+                    for m in ["方法1", "方法2", "方法3", "方法4"]:
+                        m_key = f"{m}_{i // retrain_interval}"
+                        if m_key not in trained_models:
+                            if m == "方法1":
+                                g = Method1NewRule(train_data)
+                                b = g.generate_bets(current_num_bets, "7+1")
+                                trained_models[m_key] = b
+                            elif m == "方法2":
+                                g = Method2DanTuo(train_data)
+                                b = g.generate_bets(current_num_bets, "7+1")
+                                trained_models[m_key] = b
+                            elif m == "方法3":
+                                g = Method3LightGBM(train_data)
+                                g.train()
+                                b = g.generate_bets(current_num_bets, "7+1")
+                                trained_models[m_key] = b
+                            elif m == "方法4":
+                                g = Method4Ensemble(train_data)
+                                g.train()
+                                b = g.generate_bets(current_num_bets, "7+1")
+                                trained_models[m_key] = b
+                        methods_results[m] = trained_models[m_key]
+                    
+                    # 合并所有投注，统计频率
+                    all_reds = []
+                    all_blues = []
+                    for m in ["方法1", "方法2", "方法3", "方法4"]:
+                        for bet in methods_results[m]:
+                            all_reds.extend(bet['reds'])
+                            all_blues.extend(bet.get('blues', [bet['blue']]))
+                    
+                    from collections import Counter
+                    red_counter = Counter(all_reds)
+                    blue_counter = Counter(all_blues)
+                    
+                    top_reds = [num for num, _ in red_counter.most_common(7)]
+                    top_reds.sort()
+                    top_blues = [num for num, _ in blue_counter.most_common(2)]
+                    
+                    bets = [{
+                        'reds': top_reds,
+                        'blues': top_blues,
+                        'blue': top_blues[0] if top_blues else 8,
+                        'sum': sum(top_reds),
+                        'method': '方法5:综合模式'
+                    }]
+                    trained_models[model_key] = bets
+                
+                else:
+                    generator = Method1NewRule(train_data)
+                    bets = generator.generate_bets(current_num_bets, "7+1")
+                    trained_models[model_key] = bets
             else:
-                generator = Method1NewRule(train_data)
-                bets = generator.generate_bets(num_bets, "7+1")
-                blue_system = BlueScoreSystem(train_data)
-                for bet in bets:
-                    blue = blue_system.select_blue()
-                    bet['blues'] = [blue]
-                    bet['blue'] = blue
-                trained_models[model_key] = bets
-        else:
-            bets = trained_models[model_key]
-        
-        # 计算中奖
-        period_prize = 0
-        for bet in bets:
-            prize, level = calculate_prize_for_single_bet(bet, test_data)
-            period_prize += prize
+                bets = trained_models[model_key]
             
-            if "一等奖" in level:
-                prize_breakdown["first"] += 1
-            elif "二等奖" in level:
-                prize_breakdown["second"] += 1
-            elif "三等奖" in level:
-                prize_breakdown["third"] += 1
-            elif "四等奖" in level:
-                prize_breakdown["fourth"] += 1
-            elif "五等奖" in level:
-                prize_breakdown["fifth"] += 1
-            elif "六等奖" in level:
-                prize_breakdown["sixth"] += 1
-            elif "福运奖" in level:
-                prize_breakdown["fuyun"] += 1
+            # 计算中奖
+            period_prize = 0
+            for bet in bets:
+                prize, level = calculate_prize_for_single_bet(bet, test_data)
+                period_prize += prize
+                
+                if "一等奖" in level:
+                    prize_breakdown["first"] += 1
+                elif "二等奖" in level:
+                    prize_breakdown["second"] += 1
+                elif "三等奖" in level:
+                    prize_breakdown["third"] += 1
+                elif "四等奖" in level:
+                    prize_breakdown["fourth"] += 1
+                elif "五等奖" in level:
+                    prize_breakdown["fifth"] += 1
+                elif "六等奖" in level:
+                    prize_breakdown["sixth"] += 1
+                elif "福运奖" in level:
+                    prize_breakdown["fuyun"] += 1
+            
+            total_cost += current_num_bets * 14
+            total_prize += period_prize
+            if period_prize > 0:
+                win_count += 1
         
-        total_cost += num_bets * 14
-        total_prize += period_prize
-        if period_prize > 0:
-            win_count += 1
+        periods = lookback
+        net = total_prize - total_cost
+        roi = (net / total_cost) * 100 if total_cost > 0 else 0
+        win_rate = (win_count / bet_periods) * 100 if bet_periods > 0 else 0
+        
+        return {
+            "roi": roi,
+            "total_cost": total_cost,
+            "total_prize": total_prize,
+            "net": net,
+            "win_rate": win_rate,
+            "periods": periods,
+            "bet_periods": bet_periods,
+            "skip_periods": skip_periods,
+            "train_window_used": train_window,
+            "prize_breakdown": prize_breakdown
+        }
     
-    periods = lookback
-    net = total_prize - total_cost
-    roi = (net / total_cost) * 100 if total_cost > 0 else 0
-    win_rate = (win_count / bet_periods) * 100 if bet_periods > 0 else 0
-    
-    return {
-        "roi": roi,
-        "total_cost": total_cost,
-        "total_prize": total_prize,
-        "net": net,
-        "win_rate": win_rate,
-        "periods": periods,
-        "bet_periods": bet_periods,
-        "skip_periods": skip_periods,
-        "train_window_used": train_window,
-        "prize_breakdown": prize_breakdown
-    }
+    finally:
+        # 恢复原始 session_state 设置
+        st.session_state['sum_predict_method'] = original_sum_method
+        st.session_state['blue_predict_method'] = original_blue_method
 
 
 print("第4部分加载完成（v14.1 - 支持3种种子模式）")
@@ -4361,7 +4500,11 @@ if 'last_training_time' not in st.session_state:
     st.session_state['last_training_time'] = None
 if 'last_bet_type' not in st.session_state:
     st.session_state['last_bet_type'] = "7+1"
-
+# ========== 新增：预测方法默认值 ==========
+if 'sum_predict_method' not in st.session_state:
+    st.session_state['sum_predict_method'] = '7期均值 (±10%)'
+if 'blue_predict_method' not in st.session_state:
+    st.session_state['blue_predict_method'] = '7期均值 (±3环形)'
 # ==================== 主页面标题 ====================
 col_title, col_settings = st.columns([0.9, 0.1])
 with col_title:
@@ -4557,7 +4700,7 @@ with col3:
     )
 
 st.markdown("---")
-
+#------------
 # ==================== 和值趋势分析 ====================
 st.subheader("📈 和值趋势分析")
 
@@ -4572,8 +4715,10 @@ trend_periods = st.slider(
 
 sum_trend = get_sum_trend(draws, trend_periods)
 
-# ========== 修改：使用正弦拟合预测 ==========
-target_sum, tolerance = get_target_sum_sine(draws)
+# 计算两种预测方法的结果
+sine_target, sine_tolerance = get_target_sum_sine(draws)
+range_lower, range_upper = get_target_sum_range(draws)
+range_target = (range_lower + range_upper) // 2
 
 # 绘制和值走势图
 fig_sum = go.Figure()
@@ -4605,27 +4750,53 @@ fig_sum.update_layout(
 st.plotly_chart(fig_sum, use_container_width=True)
 
 st.markdown("**📊 和值预测参考**")
-col1, col2, col3, col4 = st.columns(4)
+
+# 显示两种预测方法的结果
+col1, col2, col3, col4, col5 = st.columns(5)
 with col1:
     st.metric("理论均值", f"{RED_EXPECTED_SUM}")
 with col2:
     st.metric("历史均值", f"{sum_trend['mean_sum']:.1f}")
 with col3:
-    st.metric("正弦拟合预测", f"{target_sum} ± {tolerance}")
+    st.metric("正弦拟合", f"{sine_target} ± {sine_tolerance}")
 with col4:
+    st.metric("7期均值", f"{range_target} ± {int((range_upper - range_lower)/2)}", 
+              delta=f"范围 {range_lower}-{range_upper}")
+with col5:
     current_sum = sum(draws[-1].get('reds', []))
     st.metric("当前和值", f"{current_sum}", delta=f"{current_sum - RED_EXPECTED_SUM:+d}")
+
+# 和值预测方法选择
+st.markdown("**🎯 和值预测方法**")
+col_method1, col_method2 = st.columns(2)
+with col_method1:
+    use_sine_sum = st.radio(
+        "选择预测方法",
+        options=["正弦拟合", "7期均值 (±10%)"],
+        index=1,  # 默认7期均值
+        key="sum_predict_method",
+        horizontal=True
+    )
+with col_method2:
+    if use_sine_sum == "正弦拟合":
+        st.info(f"当前预测: {sine_target} ± {sine_tolerance}")
+    else:
+        st.info(f"当前预测: 范围 {range_lower}-{range_upper}")
 
 st.markdown("---")
 #------------------
 # ==================== 蓝球走势分析 ====================
-st.subheader("💙 蓝球走势分析（正弦拟合）")
+st.subheader("💙 蓝球走势分析")
 
-st.caption("📊 基于最近50期蓝球走势，正弦拟合基于最近8期数据预测下一期")
+# 计算两种预测方法的结果
+blue_sine_prediction, recent_blues, recent_periods = get_blue_sine_prediction(draws, window=8)
+blue_range_candidates = get_blue_range(draws, window=7, radius=3)
+blue_range_center = int(round(np.mean([d.get('blue', 0) for d in draws[-7:] if d.get('blue', 0) > 0]))) if len(draws) >= 7 else 8
 
-# 获取数据（改为50期）
+st.caption(f"📊 正弦拟合基于最近8期 | 7期均值基于最近7期（环形±3）")
+
+# 获取50期蓝球数据
 blue_series_50, period_series_50 = get_blue_series_for_plot(draws, lookback=50)
-prediction, recent_blues, recent_periods = get_blue_sine_prediction(draws, window=8)
 
 if len(blue_series_50) >= 10:
     try:
@@ -4638,16 +4809,11 @@ if len(blue_series_50) >= 10:
             y=blue_series_50,
             mode='markers',
             name='实际蓝球',
-            marker=dict(
-                color='#1f77b4',
-                size=8,
-                symbol='circle'
-            )
+            marker=dict(color='#1f77b4', size=8, symbol='circle')
         ))
         
         # 绘制正弦拟合预测线（基于最近8期）
         if len(recent_blues) >= 6:
-            # 创建拟合曲线点
             fit_x = list(range(len(blue_series_50) - len(recent_blues), len(blue_series_50)))
             fit_y = recent_blues
             
@@ -4660,18 +4826,13 @@ if len(blue_series_50) >= 10:
                 marker=dict(color='#ff7f0e', size=6)
             ))
             
-            # 标记预测点
+            # 标记正弦拟合预测点
             fig_blue.add_trace(go.Scatter(
                 x=[len(blue_series_50)],
-                y=[prediction],
+                y=[blue_sine_prediction],
                 mode='markers',
-                name=f'预测下一期: {prediction:02d}',
-                marker=dict(
-                    color='red',
-                    size=12,
-                    symbol='star',
-                    line=dict(width=2, color='darkred')
-                )
+                name=f'正弦拟合预测: {blue_sine_prediction:02d}',
+                marker=dict(color='red', size=12, symbol='star', line=dict(width=2, color='darkred'))
             ))
         
         # 添加理论均值线（8.5）
@@ -4688,37 +4849,46 @@ if len(blue_series_50) >= 10:
         
         # 设置布局
         fig_blue.update_layout(
-            title="最近50期蓝球走势及正弦拟合预测",
+            title="最近50期蓝球走势",
             xaxis_title="期数（倒序）",
             yaxis_title="蓝球号码",
             height=450,
             hovermode='x unified',
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="right",
-                x=1
-            )
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
         
         st.plotly_chart(fig_blue, use_container_width=True)
         
         # 显示预测信息
+        st.markdown("**📊 蓝球预测参考**")
+        
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("正弦拟合预测", f"{prediction:02d}", delta="下一期蓝球")
+            st.metric("正弦拟合预测", f"{blue_sine_prediction:02d}")
         with col2:
+            range_str = ' '.join([f"{c:02d}" for c in blue_range_candidates[:5]] + ['...'] if len(blue_range_candidates) > 5 else ' '.join([f"{c:02d}" for c in blue_range_candidates]))
+            st.metric("7期均值候选", f"{len(blue_range_candidates)}个号码", delta=range_str[:20])
+        with col3:
             last_blue = blue_series_50[-1] if blue_series_50 else 0
             st.metric("上期蓝球", f"{last_blue:02d}")
-        with col3:
-            if len(recent_blues) >= 3:
-                recent_str = ' '.join([f"{b:02d}" for b in recent_blues[-3:]])
-                st.metric("最近3期蓝球", recent_str)
+        
+        # 蓝球预测方法选择
+        st.markdown("**🎯 蓝球预测方法**")
+        use_sine_blue = st.radio(
+            "选择预测方法",
+            options=["正弦拟合", "7期均值 (±3环形)"],
+            index=1,  # 默认7期均值
+            key="blue_predict_method",
+            horizontal=True
+        )
+        
+        if use_sine_blue == "正弦拟合":
+            st.info(f"当前预测: {blue_sine_prediction:02d}")
+        else:
+            st.info(f"当前预测: 候选池 {blue_range_candidates}")
     
     except Exception as e:
         st.warning(f"蓝球走势图绘制失败: {e}")
-        st.info("请检查数据或重新运行")
 else:
     st.info(f"数据不足（需要10期，当前{len(blue_series_50)}期），无法绘制蓝球走势图")
 
@@ -5109,7 +5279,7 @@ with st.expander("📈 ROI回测分析"):
         )
     with col2:
         backtest_bets = st.number_input(
-            "每期组数",
+            "每期基础组数",
             min_value=1,
             max_value=10,
             value=4,
@@ -5143,7 +5313,26 @@ with st.expander("📈 ROI回测分析"):
             help="建议尝试: 1, 3, 5, 7, 9, 10, 11"
         )
     
-    # ========== 新增：ML信号过滤 ==========
+    # ========== 新增：回测时使用的预测方法选择 ==========
+    st.markdown("**🎯 回测时使用的预测方法**")
+    col_test1, col_test2 = st.columns(2)
+    with col_test1:
+        test_sum_method = st.selectbox(
+            "和值预测方法",
+            options=["正弦拟合", "7期均值 (±10%)"],
+            index=1,  # 默认7期均值
+            key="test_sum_method"
+        )
+    with col_test2:
+        test_blue_method = st.selectbox(
+            "蓝球预测方法",
+            options=["正弦拟合", "7期均值 (±3环形)"],
+            index=1,  # 默认7期均值
+            key="test_blue_method"
+        )
+    # ================================================
+    
+    # ========== ML信号过滤 ==========
     st.markdown("**🧠 ML信号过滤**")
     col_signal1, col_signal2 = st.columns(2)
     with col_signal1:
@@ -5194,6 +5383,8 @@ with st.expander("📈 ROI回测分析"):
             else:
                 st.info("🧠 ML信号过滤：未启用，每期都投注")
             
+            st.info(f"🎯 和值预测：{test_sum_method} | 蓝球预测：{test_blue_method}")
+            
             with st.spinner(f"正在回测 {backtest_periods} 期，请稍候..."):
                 results_data = []
                 
@@ -5201,7 +5392,10 @@ with st.expander("📈 ROI回测分析"):
                 result = backtest_roi(
                     draws, "方法1", backtest_bets, backtest_periods,
                     seed_mode=seed_mode, fixed_seed_value=fixed_seed_value,
-                    use_ml_signal=use_ml_signal, signal_threshold=signal_threshold
+                    use_ml_signal=use_ml_signal, signal_threshold=signal_threshold,
+                    use_dynamic_bets=False,
+                    sum_predict_method=test_sum_method,
+                    blue_predict_method=test_blue_method
                 )
                 results_data.append({
                     "方法": "方法1:新规则系统(v15.0)",
@@ -5218,7 +5412,10 @@ with st.expander("📈 ROI回测分析"):
                 result = backtest_roi(
                     draws, "方法2", backtest_bets, backtest_periods,
                     seed_mode=seed_mode, fixed_seed_value=fixed_seed_value,
-                    use_ml_signal=use_ml_signal, signal_threshold=signal_threshold
+                    use_ml_signal=use_ml_signal, signal_threshold=signal_threshold,
+                    use_dynamic_bets=False,
+                    sum_predict_method=test_sum_method,
+                    blue_predict_method=test_blue_method
                 )
                 results_data.append({
                     "方法": "方法2:胆拖混合",
@@ -5235,7 +5432,10 @@ with st.expander("📈 ROI回测分析"):
                 result = backtest_roi(
                     draws, "方法3", backtest_bets, backtest_periods,
                     seed_mode=seed_mode, fixed_seed_value=fixed_seed_value,
-                    use_ml_signal=use_ml_signal, signal_threshold=signal_threshold
+                    use_ml_signal=use_ml_signal, signal_threshold=signal_threshold,
+                    use_dynamic_bets=False,
+                    sum_predict_method=test_sum_method,
+                    blue_predict_method=test_blue_method
                 )
                 results_data.append({
                     "方法": "方法3:LightGBM",
@@ -5252,7 +5452,10 @@ with st.expander("📈 ROI回测分析"):
                 result = backtest_roi(
                     draws, "方法4", backtest_bets, backtest_periods,
                     seed_mode=seed_mode, fixed_seed_value=fixed_seed_value,
-                    use_ml_signal=use_ml_signal, signal_threshold=signal_threshold
+                    use_ml_signal=use_ml_signal, signal_threshold=signal_threshold,
+                    use_dynamic_bets=False,
+                    sum_predict_method=test_sum_method,
+                    blue_predict_method=test_blue_method
                 )
                 results_data.append({
                     "方法": "方法4:XGBoost",
@@ -5269,7 +5472,10 @@ with st.expander("📈 ROI回测分析"):
                 result = backtest_roi(
                     draws, "方法5", backtest_bets, backtest_periods,
                     seed_mode=seed_mode, fixed_seed_value=fixed_seed_value,
-                    use_ml_signal=use_ml_signal, signal_threshold=signal_threshold
+                    use_ml_signal=use_ml_signal, signal_threshold=signal_threshold,
+                    use_dynamic_bets=False,
+                    sum_predict_method=test_sum_method,
+                    blue_predict_method=test_blue_method
                 )
                 results_data.append({
                     "方法": "方法5:综合模式",
