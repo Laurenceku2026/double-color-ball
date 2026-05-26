@@ -4488,9 +4488,8 @@ if len(blue_series_100) >= 10:
             annotation_position="top right"
         )
         
-        # 设置Y轴范围
-        fig_blue.update_yaxis(range=[0.5, 16.5])
-        fig_blue.update_yaxis(tickmode='linear', tick0=1, dtick=1)
+        # 设置Y轴范围（正确方式：一次调用设置多个参数）
+        fig_blue.update_yaxes(range=[0.5, 16.5], tickmode='linear', tick0=1, dtick=1)
         
         # 设置布局
         fig_blue.update_layout(
