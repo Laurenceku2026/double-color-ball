@@ -4426,21 +4426,21 @@ st.markdown("---")
 # ==================== 蓝球走势分析 ====================
 st.subheader("💙 蓝球走势分析（正弦拟合）")
 
-st.caption("📊 基于最近100期蓝球走势，正弦拟合基于最近8期数据预测下一期")
+st.caption("📊 基于最近50期蓝球走势，正弦拟合基于最近8期数据预测下一期")
 
-# 获取数据
-blue_series_100, period_series_100 = get_blue_series_for_plot(draws, lookback=100)
+# 获取数据（改为50期）
+blue_series_50, period_series_50 = get_blue_series_for_plot(draws, lookback=50)
 prediction, recent_blues, recent_periods = get_blue_sine_prediction(draws, window=8)
 
-if len(blue_series_100) >= 10:
+if len(blue_series_50) >= 10:
     try:
         # 创建图表
         fig_blue = go.Figure()
         
-        # 绘制实际蓝球（100期，用点表示）
+        # 绘制实际蓝球（50期，用点表示）
         fig_blue.add_trace(go.Scatter(
-            x=list(range(len(blue_series_100))),
-            y=blue_series_100,
+            x=list(range(len(blue_series_50))),
+            y=blue_series_50,
             mode='markers',
             name='实际蓝球',
             marker=dict(
@@ -4453,7 +4453,7 @@ if len(blue_series_100) >= 10:
         # 绘制正弦拟合预测线（基于最近8期）
         if len(recent_blues) >= 6:
             # 创建拟合曲线点
-            fit_x = list(range(len(blue_series_100) - len(recent_blues), len(blue_series_100)))
+            fit_x = list(range(len(blue_series_50) - len(recent_blues), len(blue_series_50)))
             fit_y = recent_blues
             
             fig_blue.add_trace(go.Scatter(
@@ -4467,7 +4467,7 @@ if len(blue_series_100) >= 10:
             
             # 标记预测点
             fig_blue.add_trace(go.Scatter(
-                x=[len(blue_series_100)],
+                x=[len(blue_series_50)],
                 y=[prediction],
                 mode='markers',
                 name=f'预测下一期: {prediction:02d}',
@@ -4488,12 +4488,12 @@ if len(blue_series_100) >= 10:
             annotation_position="top right"
         )
         
-        # 设置Y轴范围（正确方式：一次调用设置多个参数）
+        # 设置Y轴范围
         fig_blue.update_yaxes(range=[0.5, 16.5], tickmode='linear', tick0=1, dtick=1)
         
         # 设置布局
         fig_blue.update_layout(
-            title="最近100期蓝球走势及正弦拟合预测",
+            title="最近50期蓝球走势及正弦拟合预测",
             xaxis_title="期数（倒序）",
             yaxis_title="蓝球号码",
             height=450,
@@ -4514,7 +4514,7 @@ if len(blue_series_100) >= 10:
         with col1:
             st.metric("正弦拟合预测", f"{prediction:02d}", delta="下一期蓝球")
         with col2:
-            last_blue = blue_series_100[-1] if blue_series_100 else 0
+            last_blue = blue_series_50[-1] if blue_series_50 else 0
             st.metric("上期蓝球", f"{last_blue:02d}")
         with col3:
             if len(recent_blues) >= 3:
@@ -4525,7 +4525,7 @@ if len(blue_series_100) >= 10:
         st.warning(f"蓝球走势图绘制失败: {e}")
         st.info("请检查数据或重新运行")
 else:
-    st.info(f"数据不足（需要10期，当前{len(blue_series_100)}期），无法绘制蓝球走势图")
+    st.info(f"数据不足（需要10期，当前{len(blue_series_50)}期），无法绘制蓝球走势图")
 
 st.markdown("---")
 
