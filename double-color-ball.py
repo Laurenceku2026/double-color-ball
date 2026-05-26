@@ -4433,95 +4433,100 @@ blue_series_100, period_series_100 = get_blue_series_for_plot(draws, lookback=10
 prediction, recent_blues, recent_periods = get_blue_sine_prediction(draws, window=8)
 
 if len(blue_series_100) >= 10:
-    # 创建图表
-    fig_blue = go.Figure()
-    
-    # 绘制实际蓝球（100期，用点表示）
-    fig_blue.add_trace(go.Scatter(
-        x=list(range(len(blue_series_100))),
-        y=blue_series_100,
-        mode='markers',
-        name='实际蓝球',
-        marker=dict(
-            color='#1f77b4',
-            size=8,
-            symbol='circle'
-        )
-    ))
-    
-    # 绘制正弦拟合预测线（基于最近8期）
-    if len(recent_blues) >= 6:
-        # 创建拟合曲线点
-        fit_x = list(range(len(blue_series_100) - len(recent_blues), len(blue_series_100)))
-        fit_y = recent_blues
+    try:
+        # 创建图表
+        fig_blue = go.Figure()
         
+        # 绘制实际蓝球（100期，用点表示）
         fig_blue.add_trace(go.Scatter(
-            x=fit_x,
-            y=fit_y,
-            mode='lines+markers',
-            name='正弦拟合（最近8期）',
-            line=dict(color='#ff7f0e', width=2, dash='dash'),
-            marker=dict(color='#ff7f0e', size=6)
-        ))
-        
-        # 标记预测点
-        fig_blue.add_trace(go.Scatter(
-            x=[len(blue_series_100)],
-            y=[prediction],
+            x=list(range(len(blue_series_100))),
+            y=blue_series_100,
             mode='markers',
-            name=f'预测下一期: {prediction:02d}',
+            name='实际蓝球',
             marker=dict(
-                color='red',
-                size=12,
-                symbol='star',
-                line=dict(width=2, color='darkred')
+                color='#1f77b4',
+                size=8,
+                symbol='circle'
             )
         ))
-    
-    # 添加理论均值线（8.5）
-    fig_blue.add_hline(
-        y=8.5,
-        line_dash="dash",
-        line_color="green",
-        annotation_text="理论均值(8.5)",
-        annotation_position="top right"
-    )
-    
-    # 设置Y轴范围
-    fig_blue.update_yaxis(range=[0.5, 16.5], tickmode='linear', tick0=1, dtick=1)
-    
-    # 设置布局
-    fig_blue.update_layout(
-        title="最近100期蓝球走势及正弦拟合预测",
-        xaxis_title="期数（倒序）",
-        yaxis_title="蓝球号码",
-        height=450,
-        hovermode='x unified',
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
+        
+        # 绘制正弦拟合预测线（基于最近8期）
+        if len(recent_blues) >= 6:
+            # 创建拟合曲线点
+            fit_x = list(range(len(blue_series_100) - len(recent_blues), len(blue_series_100)))
+            fit_y = recent_blues
+            
+            fig_blue.add_trace(go.Scatter(
+                x=fit_x,
+                y=fit_y,
+                mode='lines+markers',
+                name='正弦拟合（最近8期）',
+                line=dict(color='#ff7f0e', width=2, dash='dash'),
+                marker=dict(color='#ff7f0e', size=6)
+            ))
+            
+            # 标记预测点
+            fig_blue.add_trace(go.Scatter(
+                x=[len(blue_series_100)],
+                y=[prediction],
+                mode='markers',
+                name=f'预测下一期: {prediction:02d}',
+                marker=dict(
+                    color='red',
+                    size=12,
+                    symbol='star',
+                    line=dict(width=2, color='darkred')
+                )
+            ))
+        
+        # 添加理论均值线（8.5）
+        fig_blue.add_hline(
+            y=8.5,
+            line_dash="dash",
+            line_color="green",
+            annotation_text="理论均值(8.5)",
+            annotation_position="top right"
         )
-    )
+        
+        # 设置Y轴范围
+        fig_blue.update_yaxis(range=[0.5, 16.5])
+        fig_blue.update_yaxis(tickmode='linear', tick0=1, dtick=1)
+        
+        # 设置布局
+        fig_blue.update_layout(
+            title="最近100期蓝球走势及正弦拟合预测",
+            xaxis_title="期数（倒序）",
+            yaxis_title="蓝球号码",
+            height=450,
+            hovermode='x unified',
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            )
+        )
+        
+        st.plotly_chart(fig_blue, use_container_width=True)
+        
+        # 显示预测信息
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("正弦拟合预测", f"{prediction:02d}", delta="下一期蓝球")
+        with col2:
+            last_blue = blue_series_100[-1] if blue_series_100 else 0
+            st.metric("上期蓝球", f"{last_blue:02d}")
+        with col3:
+            if len(recent_blues) >= 3:
+                recent_str = ' '.join([f"{b:02d}" for b in recent_blues[-3:]])
+                st.metric("最近3期蓝球", recent_str)
     
-    st.plotly_chart(fig_blue, use_container_width=True)
-    
-    # 显示预测信息
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("正弦拟合预测", f"{prediction:02d}", delta="下一期蓝球")
-    with col2:
-        last_blue = blue_series_100[-1] if blue_series_100 else 0
-        st.metric("上期蓝球", f"{last_blue:02d}")
-    with col3:
-        if len(recent_blues) >= 3:
-            # 显示最近3期蓝球
-            recent_str = ' '.join([f"{b:02d}" for b in recent_blues[-3:]])
-            st.metric("最近3期蓝球", recent_str)
+    except Exception as e:
+        st.warning(f"蓝球走势图绘制失败: {e}")
+        st.info("请检查数据或重新运行")
 else:
-    st.info("数据不足，无法绘制蓝球走势图")
+    st.info(f"数据不足（需要10期，当前{len(blue_series_100)}期），无法绘制蓝球走势图")
 
 st.markdown("---")
 
