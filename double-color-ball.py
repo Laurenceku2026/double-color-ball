@@ -1568,7 +1568,80 @@ def get_sum_trend(draws: List[Dict], analysis_periods: int = 50):
         'analysis_periods': analysis_periods
     }
 
+#----------------
+# ==================== 正弦拟合和值预测（公共函数） ====================
+def sine_fit_predict_sum(recent_sums: List[int]) -> int:
+    """
+    正弦拟合预测下一期和值（纯函数）
+    
+    参数:
+        recent_sums: 最近10期和值列表
+    返回:
+        预测的和值（80-125范围内）
+    """
+    from scipy.optimize import curve_fit
+    
+    if len(recent_sums) < 10:
+        return int(round(np.mean(recent_sums))) if recent_sums else 102
+    
+    def sine_func(x, A, omega, phi, C):
+        return A * np.sin(omega * x + phi) + C
+    
+    x = np.arange(len(recent_sums))
+    y = np.array(recent_sums)
+    
+    # 初始参数猜测
+    A_guess = (np.max(y) - np.min(y)) / 2
+    C_guess = np.mean(y)
+    omega_guess = 2 * np.pi / 6.5  # 周期约6.5期
+    
+    try:
+        params, _ = curve_fit(
+            sine_func, x, y,
+            p0=[A_guess, omega_guess, 0, C_guess],
+            bounds=([0, 2*np.pi/15, -np.pi, 80], 
+                    [50, 2*np.pi/4, np.pi, 125]),
+            maxfev=2000
+        )
+        A, omega, phi, C = params
+        next_val = sine_func(len(recent_sums), A, omega, phi, C)
+        return max(80, min(125, int(round(next_val))))
+    except:
+        # 拟合失败时降级使用均值回归
+        short_mean = np.mean(recent_sums)
+        deviation = short_mean - 102
+        if abs(deviation) > 10:
+            target = 102 + int(deviation * 0.5)
+        else:
+            target = 102
+        return max(80, min(125, target))
 
+
+def get_target_sum_sine(draws: List[Dict], tolerance: int = 12) -> Tuple[int, int]:
+    """
+    获取正弦拟合预测的和值（供UI和选号使用）
+    
+    参数:
+        draws: 历史开奖数据
+        tolerance: 容差，默认12
+    返回:
+        (预测和值, 容差)
+    """
+    if len(draws) < 10:
+        return 102, tolerance
+    
+    # 获取最近10期和值
+    recent_sums = []
+    for draw in draws[-10:]:
+        reds = draw.get('reds', [])
+        if reds:
+            recent_sums.append(sum(reds))
+    
+    if len(recent_sums) < 10:
+        return 102, tolerance
+    
+    target = sine_fit_predict_sum(recent_sums)
+    return target, tolerance
 # ==================== 动态和值预测（修正版） ====================
 def get_target_sum(draws: List[Dict]) -> Tuple[int, int]:
     """
@@ -2137,10 +2210,11 @@ class Method2DanTuo:
         """获取评分最高的N个号码"""
         sorted_nums = sorted(self.red_scores.items(), key=lambda x: x[1], reverse=True)
         return [num for num, _ in sorted_nums[:n]]
-    
+    #-----
     def _get_target_sum(self) -> Tuple[int, int]:
-        """正弦拟合预测和值（复用Method1NewRule的方法）"""
-        return self.scorer._get_target_sum()
+        """正弦拟合预测和值（使用公共函数）"""
+        target, _ = get_target_sum_sine(self.draws, self.sum_tolerance)
+        return target, self.sum_tolerance
     
     def _has_consecutive(self, reds: List[int]) -> bool:
         """检查是否有连号"""
@@ -4203,8 +4277,11 @@ trend_periods = st.slider(
 )
 
 sum_trend = get_sum_trend(draws, trend_periods)
-target_sum, tolerance = get_target_sum(draws)
 
+# ========== 修改：使用正弦拟合预测 ==========
+target_sum, tolerance = get_target_sum_sine(draws)
+
+# 绘制和值走势图
 fig_sum = go.Figure()
 fig_sum.add_trace(go.Scatter(
     x=list(range(len(sum_trend['sums']))),
@@ -4240,7 +4317,7 @@ with col1:
 with col2:
     st.metric("历史均值", f"{sum_trend['mean_sum']:.1f}")
 with col3:
-    st.metric("预测目标", f"{target_sum} ± {tolerance}")
+    st.metric("正弦拟合预测", f"{target_sum} ± {tolerance}")
 with col4:
     current_sum = sum(draws[-1].get('reds', []))
     st.metric("当前和值", f"{current_sum}", delta=f"{current_sum - RED_EXPECTED_SUM:+d}")
