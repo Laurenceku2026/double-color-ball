@@ -3458,38 +3458,38 @@ class Method1NewRule:
         self.cold_pool = [num for num in RED_NUMBERS if self.red_scores[num] < self.normal_threshold]
     #-----
     def _calculate_total_score(self, num: int) -> int:
-    """
-    计算单号码综合评分
-    公式：基础分 + 可选加分项（基础分始终开启）
-    """
-    absence = self._calculate_absence(num)
-    
-    # 基础分（始终开启）
-    base_score = self._get_base_score(absence)
-    
-    # 如果是上期号码，直接返回基础分
-    if absence == 0:
-        return base_score
-    
-    bonus = 0
-    
-    # 1. 频率加速度（可开关）
-    if self.enable_freq_acc and self._calculate_frequency_acceleration(num) > 0.1:
-        bonus += 25
-    
-    # 2. 疏转密（可开关）
-    if self.enable_density_trend and self._is_density_turning(num):
-        bonus += 20
-    
-    # 3. 遗漏13-20期（可开关）
-    if self.enable_absence_bonus and 13 <= absence <= 20:
-        bonus += 30
-    
-    # 4. 隔期模式（可开关）
-    if self.enable_alternating and self._is_alternating(num):
-        bonus += 12
-    
-    return base_score + bonus
+        """
+        计算单号码综合评分
+        公式：基础分 + 可选加分项（基础分始终开启）
+        """
+        absence = self._calculate_absence(num)
+        
+        # 基础分（始终开启）
+        base_score = self._get_base_score(absence)
+        
+        # 如果是上期号码，直接返回基础分
+        if absence == 0:
+            return base_score
+        
+        bonus = 0
+        
+        # 1. 频率加速度（可开关）
+        if self.enable_freq_acc and self._calculate_frequency_acceleration(num) > 0.1:
+            bonus += 25
+        
+        # 2. 疏转密（可开关）
+        if self.enable_density_trend and self._is_density_turning(num):
+            bonus += 20
+        
+        # 3. 遗漏13-20期（可开关）
+        if self.enable_absence_bonus and 13 <= absence <= 20:
+            bonus += 30
+        
+        # 4. 隔期模式（可开关）
+        if self.enable_alternating and self._is_alternating(num):
+            bonus += 12
+        
+        return base_score + bonus
     
     def _calculate_absence(self, num: int) -> int:
         """计算遗漏期数"""
