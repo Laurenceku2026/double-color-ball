@@ -4133,7 +4133,6 @@ st.markdown("---")
 # ==================== 冷热码分析（新规则系统 v15.0） ====================
 st.subheader("🔥 冷热码分析（基于综合评分）")
 
-# 固定使用100期说明
 st.caption("📊 基于最近100期数据，使用综合评分体系（基础分+频率加速度+疏转密+遗漏加分+隔期加分）")
 
 # 获取新系统的评分
@@ -4142,12 +4141,12 @@ blue_scores = get_blue_scores_by_new_system(draws)
 
 # 红球评分排序
 sorted_reds = sorted(red_scores.items(), key=lambda x: x[1], reverse=True)
-hot_reds_top10 = sorted_reds[:10]      # 热门红球 Top 10
-cold_reds_bottom10 = sorted_reds[-10:] # 冷门红球 Bottom 10
+hot_reds_top10 = sorted_reds[:10]
+cold_reds_bottom10 = sorted_reds[-10:]
 
 # 蓝球评分排序
 sorted_blues = sorted(blue_scores.items(), key=lambda x: x[1], reverse=True)
-hot_blues_top10 = sorted_blues[:10]    # 篮球热度 Top 10
+hot_blues_top10 = sorted_blues[:10]
 
 # 并排显示3列
 col1, col2, col3 = st.columns(3)
@@ -4163,8 +4162,8 @@ with col1:
         use_container_width=True,
         hide_index=True,
         column_config={
-            '号码': st.column_config.TextColumn('号码', width='small'),
-            '评分': st.column_config.NumberColumn('评分', width='small')
+            '号码': st.column_config.TextColumn('号码', width='small', help='红球号码'),
+            '评分': st.column_config.NumberColumn('评分', width='small', help='综合评分')
         }
     )
 
@@ -4179,8 +4178,8 @@ with col2:
         use_container_width=True,
         hide_index=True,
         column_config={
-            '号码': st.column_config.TextColumn('号码', width='small'),
-            '评分': st.column_config.NumberColumn('评分', width='small')
+            '号码': st.column_config.TextColumn('号码', width='small', help='红球号码'),
+            '评分': st.column_config.NumberColumn('评分', width='small', help='综合评分')
         }
     )
 
@@ -4195,8 +4194,8 @@ with col3:
         use_container_width=True,
         hide_index=True,
         column_config={
-            '蓝球': st.column_config.TextColumn('蓝球', width='small'),
-            '评分': st.column_config.NumberColumn('评分', width='small')
+            '蓝球': st.column_config.TextColumn('蓝球', width='small', help='蓝球号码'),
+            '评分': st.column_config.NumberColumn('评分', width='small', help='综合评分')
         }
     )
 
