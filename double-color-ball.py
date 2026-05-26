@@ -1378,8 +1378,7 @@ def sync_to_supabase_from_17500(max_periods: int = 500):
         "deleted": deleted
     }
 #-----
-
-
+#----------
 # ==================== 冷热码分析 ====================
 def get_hot_cold_analysis(draws: List[Dict], analysis_periods: int = 100):
     """
@@ -3702,7 +3701,51 @@ class BetGenerator:
     def generate_ensemble(draws: List[Dict], num_bets: int = 4, bet_type: str = "7+1") -> List[Dict]:
         return generate_ensemble_bets(draws, num_bets, bet_type)
 
+#----------------
+# ==================== 新规则系统评分获取函数 ====================
 
+def get_red_scores_by_new_system(draws: List[Dict]) -> Dict[int, int]:
+    """
+    使用新规则系统计算所有红球的综合评分
+    固定使用最近100期数据
+    """
+    if len(draws) < 10:
+        return {num: 0 for num in range(1, 34)}
+    
+    # 固定使用最近100期数据
+    if len(draws) > 100:
+        recent_draws = draws[-100:]
+    else:
+        recent_draws = draws
+    
+    # 创建新规则系统实例并获取评分
+    scorer = Method1NewRule(recent_draws)
+    return scorer.red_scores
+
+
+def get_blue_scores_by_new_system(draws: List[Dict]) -> Dict[int, int]:
+    """
+    使用新蓝球系统计算所有蓝球的综合评分
+    固定使用最近100期数据
+    """
+    if len(draws) < 10:
+        return {num: 0 for num in range(1, 17)}
+    
+    # 固定使用最近100期数据
+    if len(draws) > 100:
+        recent_draws = draws[-100:]
+    else:
+        recent_draws = draws
+    
+    # 创建蓝球评分系统实例
+    scorer = BlueScoreSystem(recent_draws)
+    
+    # 计算每个蓝球的评分
+    scores = {}
+    for num in range(1, 17):
+        scores[num] = scorer.calculate_total_score(num)
+    
+    return scores
 # ============================================================
 # 优化版回测函数（支持3种种子模式）
 # 修改：方法1改为使用 Method1NewRule（新规则系统）
@@ -4086,71 +4129,76 @@ with col5:
     st.metric("数据总量", f"{len(draws)}期")
 
 st.markdown("---")
+#---------
+# ==================== 冷热码分析（新规则系统 v15.0） ====================
+st.subheader("🔥 冷热码分析（基于综合评分）")
 
-# ==================== 冷热码分析显示 ====================
-st.subheader("🔥 冷热码分析")
+# 固定使用100期说明
+st.caption("📊 基于最近100期数据，使用综合评分体系（基础分+频率加速度+疏转密+遗漏加分+隔期加分）")
 
-col1, col2 = st.columns(2)
-with col1:
-    analysis_periods = st.slider(
-        "冷热码统计期数", 
-        min_value=20, 
-        max_value=min(500, len(draws)), 
-        value=min(100, len(draws)), 
-        step=10,
-        key="hot_cold_periods"
-    )
-with col2:
-    zone_periods = st.slider(
-        "3分区统计期数",
-        min_value=20,
-        max_value=min(500, len(draws)),
-        value=min(100, len(draws)),
-        step=10,
-        key="zone_periods"
-    )
+# 获取新系统的评分
+red_scores = get_red_scores_by_new_system(draws)
+blue_scores = get_blue_scores_by_new_system(draws)
 
-cold_hot_data = get_hot_cold_analysis(draws, analysis_periods)
-zone_heat = get_zone_heat(draws, zone_periods)
+# 红球评分排序
+sorted_reds = sorted(red_scores.items(), key=lambda x: x[1], reverse=True)
+hot_reds_top10 = sorted_reds[:10]      # 热门红球 Top 10
+cold_reds_bottom10 = sorted_reds[-10:] # 冷门红球 Bottom 10
 
+# 蓝球评分排序
+sorted_blues = sorted(blue_scores.items(), key=lambda x: x[1], reverse=True)
+hot_blues_top10 = sorted_blues[:10]    # 篮球热度 Top 10
+
+# 并排显示3列
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.markdown("**🔥 热门红球 Top 15**")
-    hot_df = pd.DataFrame([
-        {'号码': num, '出现次数': cnt, '频率': cnt / (cold_hot_data['total_draws'] * 6) * 100 if cold_hot_data['total_draws'] > 0 else 0}
-        for num, cnt in cold_hot_data['hot_reds']
+    st.markdown("**🔥 热门红球 Top 10**")
+    hot_reds_df = pd.DataFrame([
+        {'号码': f"{num:02d}", '评分': score}
+        for num, score in hot_reds_top10
     ])
-    st.dataframe(hot_df.style.format({'频率': '{:.1f}%'}), use_container_width=True, hide_index=True)
+    st.dataframe(
+        hot_reds_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            '号码': st.column_config.TextColumn('号码', width='small'),
+            '评分': st.column_config.NumberColumn('评分', width='small')
+        }
+    )
 
 with col2:
     st.markdown("**❄️ 冷门红球 Bottom 10**")
-    cold_df = pd.DataFrame([
-        {'号码': num, '出现次数': cnt, '遗漏': cold_hot_data['red_absence'][num]}
-        for num, cnt in cold_hot_data['cold_reds']
+    cold_reds_df = pd.DataFrame([
+        {'号码': f"{num:02d}", '评分': score}
+        for num, score in cold_reds_bottom10
     ])
-    st.dataframe(cold_df, use_container_width=True, hide_index=True)
+    st.dataframe(
+        cold_reds_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            '号码': st.column_config.TextColumn('号码', width='small'),
+            '评分': st.column_config.NumberColumn('评分', width='small')
+        }
+    )
 
 with col3:
-    st.markdown("**📊 3分区热度图**")
-    zone_df = pd.DataFrame([
-        {
-            '分区': zone['name'],
-            '范围': zone['range'],
-            '热度': zone['heat_level'],
-            '出现次数': zone['hits'],
-            '占比': f"{zone['percentage']:.1f}%"
-        }
-        for zone_id, zone in zone_heat.items()
+    st.markdown("**💙 篮球热度 Top 10**")
+    hot_blues_df = pd.DataFrame([
+        {'蓝球': f"{num:02d}", '评分': score}
+        for num, score in hot_blues_top10
     ])
-    st.dataframe(zone_df, use_container_width=True, hide_index=True)
-
-st.markdown("**💙 热门蓝球 Top 8**")
-hot_blues_df = pd.DataFrame([
-    {'蓝球': num, '出现次数': cnt, '频率': cnt / cold_hot_data['total_draws'] * 100 if cold_hot_data['total_draws'] > 0 else 0}
-    for num, cnt in cold_hot_data['hot_blues']
-])
-st.dataframe(hot_blues_df.style.format({'频率': '{:.1f}%'}), use_container_width=True, hide_index=True)
+    st.dataframe(
+        hot_blues_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            '蓝球': st.column_config.TextColumn('蓝球', width='small'),
+            '评分': st.column_config.NumberColumn('评分', width='small')
+        }
+    )
 
 st.markdown("---")
 
