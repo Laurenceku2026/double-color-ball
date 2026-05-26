@@ -315,9 +315,9 @@ def save_draws_to_supabase(draws: List[Dict], overwrite: bool = True) -> int:
         st.error(f"保存失败: {e}")
         return 0
 
-
+#---------------
 def incremental_sync_draws(draws: List[Dict]) -> Dict:
-    """增量同步：只更新变更的数据"""
+    """增量同步：只更新变更的数据（优化版）"""
     if not draws:
         return {"inserted": 0, "updated": 0, "deleted": 0}
     
@@ -326,16 +326,28 @@ def incremental_sync_draws(draws: List[Dict]) -> Dict:
         return {"inserted": 0, "updated": 0, "deleted": 0}
     
     try:
-        # 获取数据库中现有期号
+        # ========== 统一期号为字符串 ==========
+        normalized_draws = []
+        for draw in draws:
+            if draw.get('period') is None:
+                continue
+            normalized_draw = draw.copy()
+            normalized_draw['period'] = str(draw['period'])
+            normalized_draws.append(normalized_draw)
+        
+        # 获取数据库中现有期号（统一转为字符串）
         existing_response = supabase.schema('ssq_schema').table('ssq_draws')\
             .select("period").execute()
-        existing_periods = {row["period"] for row in existing_response.data} if existing_response.data else set()
+        existing_periods = {str(row["period"]) for row in existing_response.data} if existing_response.data else set()
         
         # 新数据中的期号
-        new_periods = {draw.get('period') for draw in draws if draw.get('period') is not None}
+        new_periods = {draw['period'] for draw in normalized_draws if draw.get('period') is not None}
         
         # 需要删除的期号
         to_delete = existing_periods - new_periods
+        
+        # 需要新增的期号
+        to_insert = new_periods - existing_periods
         
         inserted = 0
         updated = 0
@@ -350,14 +362,12 @@ def incremental_sync_draws(draws: List[Dict]) -> Dict:
             except Exception as e:
                 st.warning(f"删除期号 {period} 失败: {e}")
         
-        # 执行更新/插入
-        for draw in draws:
-            period = draw.get('period')
-            if period is None:
-                continue
-            
+        # 准备需要插入/更新的数据（只处理新增和已存在的）
+        upsert_data = []
+        for draw in normalized_draws:
+            period = draw['period']
             reds = draw.get('reds', [])
-            data = {
+            upsert_data.append({
                 "period": period,
                 "date": draw.get('date'),
                 "red1": reds[0] if len(reds) > 0 else 0,
@@ -373,19 +383,14 @@ def incremental_sync_draws(draws: List[Dict]) -> Dict:
                 "prize1_amount": draw.get('prize1_amount', 0),
                 "prize2_count": draw.get('prize2_count', 0),
                 "prize2_amount": draw.get('prize2_amount', 0)
-            }
-            
-            try:
-                if period in existing_periods:
-                    supabase.schema('ssq_schema').table('ssq_draws')\
-                        .update(data).eq("period", period).execute()
-                    updated += 1
-                else:
-                    supabase.schema('ssq_schema').table('ssq_draws')\
-                        .insert(data).execute()
-                    inserted += 1
-            except Exception as e:
-                st.warning(f"同步期号 {period} 失败: {e}")
+            })
+        
+        # 使用 upsert 批量操作（一次请求处理所有新增和更新）
+        if upsert_data:
+            result = supabase.schema('ssq_schema').table('ssq_draws')\
+                .upsert(upsert_data, on_conflict='period').execute()
+            inserted = len(to_insert)
+            updated = len(new_periods) - len(to_insert)
         
         return {"inserted": inserted, "updated": updated, "deleted": deleted}
         
@@ -654,6 +659,131 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
                     skipped_count += 1
                     continue
                 
+                # ========== 修改：期号统一转为字符串 ==========
+                if '.' in str(period_val):
+                    period = str(period_val).split('.')[0]
+                else:
+                    period = str(period_val).strip()
+                
+                # 日期处理
+                date = None
+                if date_col and pd.notna(row[date_col]):
+                    date_val = row[date_col]
+                    if isinstance(date_val, datetime):
+                        date = date_val.strftime('%Y-%m-%d')
+                    else:
+                        date = str(date_val).split()[0] if ' ' in str(date_val) else str(date_val)
+                
+                # 红球
+                reds = []
+                for col in red_cols[:6]:
+                    val = row[col]
+                    if pd.notna(val):
+                        reds.append(int(val))
+                
+                if len(reds) != 6:
+                    error_count += 1
+                    continue
+                reds = sorted(reds)
+                
+                # 验证红球范围
+                if not all(1 <= r <= 33 for r in reds):
+                    error_count += 1
+                    continue
+                
+                # 蓝球
+                blue = 0
+                if blue_col and pd.notna(row[blue_col]):
+                    blue = safe_int_convert(row[blue_col])
+                
+                # 验证蓝球范围
+                if not (1 <= blue <= 16):
+                    blue = 0
+                
+                # 可选字段
+                pool = 0
+                if pool_col and pd.notna(row[pool_col]):
+                    pool = safe_int_convert(row[pool_col])
+                
+                sales = 0
+                if sales_col and pd.notna(row[sales_col]):
+                    sales = safe_int_convert(row[sales_col])
+                
+                prize1_count = 0
+                if prize1_count_col and pd.notna(row[prize1_count_col]):
+                    prize1_count = safe_int_convert(row[prize1_count_col])
+                
+                prize1_amount = 0
+                if prize1_amount_col and pd.notna(row[prize1_amount_col]):
+                    prize1_amount = safe_int_convert(row[prize1_amount_col])
+                
+                prize2_count = 0
+                if prize2_count_col and pd.notna(row[prize2_count_col]):
+                    prize2_count = safe_int_convert(row[prize2_count_col])
+                
+                prize2_amount = 0
+                if prize2_amount_col and pd.notna(row[prize2_amount_col]):
+                    prize2_amount = safe_int_convert(row[prize2_amount_col])
+                
+                draws.append({
+                    'period': period,  # 已经是字符串
+                    'date': date,
+                    'reds': reds,
+                    'blue': blue,
+                    'pool': pool,
+                    'sales': sales,
+                    'prize1_count': prize1_count,
+                    'prize1_amount': prize1_amount,
+                    'prize2_count': prize2_count,
+                    'prize2_amount': prize2_amount
+                })
+                
+            except Exception as e:
+                error_count += 1
+                continue
+        
+        if draws:
+            st.success(f"成功解析 {len(draws)} 期数据")
+            if skipped_count > 0:
+                st.warning(f"跳过 {skipped_count} 行（期号为空）")
+            if error_count > 0:
+                st.warning(f"跳过 {error_count} 行（数据格式错误）")
+            return draws
+        else:
+            st.error("未找到有效数据")
+            return None
+        
+    except Exception as e:
+        st.error(f"Excel解析错误: {e}")
+        return None
+        
+        def safe_int_convert(val):
+            """安全转换为整数"""
+            if pd.isna(val):
+                return 0
+            if isinstance(val, (int, float)):
+                return int(val)
+            val_str = str(val).strip()
+            val_str = val_str.replace(',', '').replace(' ', '')
+            val_str = val_str.replace('\n', '').replace('\r', '')
+            if val_str == '' or val_str == '0' or val_str == 'None':
+                return 0
+            try:
+                return int(float(val_str))
+            except:
+                return 0
+        
+        draws = []
+        error_count = 0
+        skipped_count = 0
+        
+        for idx, row in df.iterrows():
+            try:
+                period_val = row[period_col]
+                if pd.isna(period_val):
+                    skipped_count += 1
+                    continue
+                
                 # 期号可能是整数或字符串
                 if str(period_val).isdigit():
                     period = int(period_val)
@@ -776,11 +906,13 @@ def text_line_to_draw(line: str, line_num: int) -> Optional[Dict]:
         return None
     
     try:
-        period_str = parts[0]
-        if str(period_str).isdigit():
-            period = int(period_str)
-        else:
-            period = period_str
+        period_str = parts[0].strip()
+        
+        # ========== 修改：期号统一转为字符串 ==========
+        # 去除可能的 .0 后缀（如 "26051.0" -> "26051"）
+        if '.' in period_str:
+            period_str = period_str.split('.')[0]
+        period = str(period_str)
         
         # 检测是否有日期列（第2列是否包含日期格式）
         has_date = False
@@ -844,7 +976,7 @@ def text_line_to_draw(line: str, line_num: int) -> Optional[Dict]:
             sales = int(float(parts[blue_idx + 6])) if parts[blue_idx + 6] and parts[blue_idx + 6] != 'None' else 0
         
         return {
-            'period': period,
+            'period': period,  # 现在是字符串
             'date': date,
             'reds': reds,
             'blue': blue,
@@ -877,7 +1009,20 @@ def show_admin_page():
     
     # 加载现有数据
     current_draws = st.session_state.get('draws_loaded', [])
+    # 在显示数据编辑器之前，保存原始数据
+    if 'original_draws' not in st.session_state:
+        st.session_state['original_draws'] = current_draws.copy()
     
+    # 在增量同步保存时
+    if incremental_submitted:
+        # 获取编辑前的原始数据
+        original_draws = st.session_state.get('original_draws', [])
+        
+        # 调用增量同步函数，传入原始数据
+        result = incremental_sync_draws(new_draws, original_draws)
+        
+        # 保存后更新原始数据
+        st.session_state['original_draws'] = new_draws.copy()
     # 构建 DataFrame
     if current_draws:
         display_draws = sorted(current_draws, key=lambda x: x.get('period', 0), reverse=True)
@@ -908,8 +1053,8 @@ def show_admin_page():
     
     # 配置列类型
     column_config = {
+        "期号": st.column_config.TextColumn("期号", required=True),
         "开奖日期": st.column_config.TextColumn("开奖日期"),
-        "期号": st.column_config.NumberColumn("期号", step=1),
         "红1": st.column_config.NumberColumn("红1", min_value=1, max_value=33, step=1),
         "红2": st.column_config.NumberColumn("红2", min_value=1, max_value=33, step=1),
         "红3": st.column_config.NumberColumn("红3", min_value=1, max_value=33, step=1),
@@ -917,10 +1062,14 @@ def show_admin_page():
         "红5": st.column_config.NumberColumn("红5", min_value=1, max_value=33, step=1),
         "红6": st.column_config.NumberColumn("红6", min_value=1, max_value=33, step=1),
         "蓝球": st.column_config.NumberColumn("蓝球", min_value=1, max_value=16, step=1),
+        "奖池奖金(元)": st.column_config.NumberColumn("奖池奖金(元)", step=1),
         "一等奖注数": st.column_config.NumberColumn("一等奖注数", step=1),
+        "一等奖奖金(元)": st.column_config.NumberColumn("一等奖奖金(元)", step=1),
         "二等奖注数": st.column_config.NumberColumn("二等奖注数", step=1),
+        "二等奖奖金(元)": st.column_config.NumberColumn("二等奖奖金(元)", step=1),
+        "总投注额(元)": st.column_config.NumberColumn("总投注额(元)", step=1),
     }
-    
+        
     # 显示数据量统计
     st.info(f"📊 当前数据量: {len(current_draws)} 期")
     
