@@ -1642,6 +1642,105 @@ def get_target_sum_sine(draws: List[Dict], tolerance: int = 12) -> Tuple[int, in
     
     target = sine_fit_predict_sum(recent_sums)
     return target, tolerance
+#---------------------
+# ==================== 蓝球正弦拟合预测 ====================
+
+def sine_fit_predict_blue(blue_sequence: List[int]) -> int:
+    """
+    正弦拟合预测下一期蓝球（纯函数）
+    
+    参数:
+        blue_sequence: 最近8期蓝球号码列表
+    返回:
+        预测的蓝球号码（1-16范围内）
+    """
+    from scipy.optimize import curve_fit
+    
+    if len(blue_sequence) < 6:
+        return int(round(np.mean(blue_sequence))) if blue_sequence else 8
+    
+    def sine_func(x, A, omega, phi, C):
+        return A * np.sin(omega * x + phi) + C
+    
+    x = np.arange(len(blue_sequence))
+    y = np.array(blue_sequence)
+    
+    # 初始参数猜测
+    A_guess = (np.max(y) - np.min(y)) / 2
+    C_guess = np.mean(y)
+    omega_guess = 2 * np.pi / 9  # 周期约9期
+    
+    try:
+        params, _ = curve_fit(
+            sine_func, x, y,
+            p0=[A_guess, omega_guess, 0, C_guess],
+            bounds=([0, 2*np.pi/15, -np.pi, 1],
+                    [8, 2*np.pi/5, np.pi, 16]),
+            maxfev=2000
+        )
+        A, omega, phi, C = params
+        pred_val = sine_func(len(blue_sequence), A, omega, phi, C)
+        pred = int(round(pred_val))
+        return max(1, min(16, pred))
+    except:
+        return int(round(np.mean(blue_sequence)))
+
+
+def get_blue_sine_prediction(draws: List[Dict], window: int = 8) -> Tuple[int, List[int], List[int]]:
+    """
+    获取蓝球正弦拟合预测数据（供绘图使用）
+    
+    参数:
+        draws: 历史开奖数据
+        window: 正弦拟合窗口（默认8期）
+    返回:
+        (预测值, 最近window期蓝球列表, 对应期号列表)
+    """
+    if len(draws) < window:
+        return 8, [], []
+    
+    # 获取最近window期蓝球
+    recent_blues = []
+    recent_periods = []
+    for draw in draws[-window:]:
+        blue = draw.get('blue', 0)
+        if 1 <= blue <= 16:
+            recent_blues.append(blue)
+            recent_periods.append(draw.get('period', ''))
+    
+    if len(recent_blues) < 6:
+        return 8, recent_blues, recent_periods
+    
+    # 正弦拟合预测
+    prediction = sine_fit_predict_blue(recent_blues)
+    
+    return prediction, recent_blues, recent_periods
+
+
+def get_blue_series_for_plot(draws: List[Dict], lookback: int = 100) -> Tuple[List[int], List[str]]:
+    """
+    获取最近lookback期蓝球序列（供绘图使用）
+    
+    参数:
+        draws: 历史开奖数据
+        lookback: 回溯期数（默认100期）
+    返回:
+        (蓝球序列, 期号序列)
+    """
+    if len(draws) > lookback:
+        recent_draws = draws[-lookback:]
+    else:
+        recent_draws = draws
+    
+    blue_series = []
+    period_series = []
+    for draw in recent_draws:
+        blue = draw.get('blue', 0)
+        if 1 <= blue <= 16:
+            blue_series.append(blue)
+            period_series.append(str(draw.get('period', '')))
+    
+    return blue_series, period_series
 # ==================== 动态和值预测（修正版） ====================
 def get_target_sum(draws: List[Dict]) -> Tuple[int, int]:
     """
@@ -4323,45 +4422,106 @@ with col4:
     st.metric("当前和值", f"{current_sum}", delta=f"{current_sum - RED_EXPECTED_SUM:+d}")
 
 st.markdown("---")
-
+#------------------
 # ==================== 蓝球走势分析 ====================
-st.subheader("💙 蓝球走势分析")
+st.subheader("💙 蓝球走势分析（正弦拟合）")
 
-blue_trend = get_blue_trend(draws, trend_periods)
+st.caption("📊 基于最近100期蓝球走势，正弦拟合基于最近8期数据预测下一期")
 
-col1, col2 = st.columns(2)
+# 获取数据
+blue_series_100, period_series_100 = get_blue_series_for_plot(draws, lookback=100)
+prediction, recent_blues, recent_periods = get_blue_sine_prediction(draws, window=8)
 
-with col1:
-    blue_freq_df = pd.DataFrame([
-        {'蓝球': num, '出现次数': blue_trend['blue_freq'][num]}
-        for num in range(1, 17)
-    ])
-    fig_blue = px.bar(
-        blue_freq_df, x='蓝球', y='出现次数',
-        title=f"最近{trend_periods}期蓝球出现频率",
-        color='出现次数',
-        color_continuous_scale='Blues'
-    )
-    fig_blue.update_layout(height=400)
-    st.plotly_chart(fig_blue, use_container_width=True)
-
-with col2:
-    st.markdown("**📊 蓝球统计**")
-    stats_df = pd.DataFrame([
-        {'指标': '小号(1-8)出现次数', '数值': blue_trend['small_count']},
-        {'指标': '大号(9-16)出现次数', '数值': blue_trend['large_count']},
-        {'指标': '小号占比', '数值': f"{blue_trend['small_count']/trend_periods*100:.1f}%" if trend_periods > 0 else "0%"},
-        {'指标': '大号占比', '数值': f"{blue_trend['large_count']/trend_periods*100:.1f}%" if trend_periods > 0 else "0%"},
-    ])
-    st.dataframe(stats_df, use_container_width=True, hide_index=True)
+if len(blue_series_100) >= 10:
+    # 创建图表
+    fig_blue = go.Figure()
     
-    st.markdown("**📋 蓝球遗漏Top 5**")
-    blue_absence_sorted = sorted(blue_trend['blue_absence'].items(), key=lambda x: x[1], reverse=True)[:5]
-    absence_df = pd.DataFrame([
-        {'蓝球': num, '遗漏期数': absence}
-        for num, absence in blue_absence_sorted
-    ])
-    st.dataframe(absence_df, use_container_width=True, hide_index=True)
+    # 绘制实际蓝球（100期，用点表示）
+    fig_blue.add_trace(go.Scatter(
+        x=list(range(len(blue_series_100))),
+        y=blue_series_100,
+        mode='markers',
+        name='实际蓝球',
+        marker=dict(
+            color='#1f77b4',
+            size=8,
+            symbol='circle'
+        )
+    ))
+    
+    # 绘制正弦拟合预测线（基于最近8期）
+    if len(recent_blues) >= 6:
+        # 创建拟合曲线点
+        fit_x = list(range(len(blue_series_100) - len(recent_blues), len(blue_series_100)))
+        fit_y = recent_blues
+        
+        fig_blue.add_trace(go.Scatter(
+            x=fit_x,
+            y=fit_y,
+            mode='lines+markers',
+            name='正弦拟合（最近8期）',
+            line=dict(color='#ff7f0e', width=2, dash='dash'),
+            marker=dict(color='#ff7f0e', size=6)
+        ))
+        
+        # 标记预测点
+        fig_blue.add_trace(go.Scatter(
+            x=[len(blue_series_100)],
+            y=[prediction],
+            mode='markers',
+            name=f'预测下一期: {prediction:02d}',
+            marker=dict(
+                color='red',
+                size=12,
+                symbol='star',
+                line=dict(width=2, color='darkred')
+            )
+        ))
+    
+    # 添加理论均值线（8.5）
+    fig_blue.add_hline(
+        y=8.5,
+        line_dash="dash",
+        line_color="green",
+        annotation_text="理论均值(8.5)",
+        annotation_position="top right"
+    )
+    
+    # 设置Y轴范围
+    fig_blue.update_yaxis(range=[0.5, 16.5], tickmode='linear', tick0=1, dtick=1)
+    
+    # 设置布局
+    fig_blue.update_layout(
+        title="最近100期蓝球走势及正弦拟合预测",
+        xaxis_title="期数（倒序）",
+        yaxis_title="蓝球号码",
+        height=450,
+        hovermode='x unified',
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        )
+    )
+    
+    st.plotly_chart(fig_blue, use_container_width=True)
+    
+    # 显示预测信息
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("正弦拟合预测", f"{prediction:02d}", delta="下一期蓝球")
+    with col2:
+        last_blue = blue_series_100[-1] if blue_series_100 else 0
+        st.metric("上期蓝球", f"{last_blue:02d}")
+    with col3:
+        if len(recent_blues) >= 3:
+            # 显示最近3期蓝球
+            recent_str = ' '.join([f"{b:02d}" for b in recent_blues[-3:]])
+            st.metric("最近3期蓝球", recent_str)
+else:
+    st.info("数据不足，无法绘制蓝球走势图")
 
 st.markdown("---")
 
