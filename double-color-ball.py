@@ -1254,7 +1254,7 @@ def show_admin_page():
     uploaded_file = st.file_uploader(
         "选择Excel文件",
         type=['xlsx', 'xls'],
-        key="excel_uploader_admin",
+        #   key="excel_uploader_admin",
         help="上传Excel文件"
     )
     
