@@ -3415,32 +3415,37 @@ class Method1NewRule:
     """
     #--------------------
     def __init__(self, draws: List[Dict]):
-        # ========== 固定使用最近100期数据 ==========
-        # 蓝球疏密周期需要6-7个周期（16期×6.25=100期）
-        if len(draws) > 100:
-            self.draws = draws[-100:]
-        else:
-            self.draws = draws
-        
-        self.red_scores = None
-        self.normal_pool = None
-        self.cold_pool = None
-        
-        # 可调节参数（支持外部修改）
-        self.normal_threshold = 50      # 正常池阈值
-        self.normal_count_layer1 = 5    # 第1层正常池抽取数
-        self.cold_count_layer1 = 1      # 第1层冷码池抽取数
-        self.normal_count_layer2 = 4    # 第2层正常池抽取数
-        self.cold_count_layer2 = 2      # 第2层冷码池抽取数
-        self.temp_normal = 0.8          # 正常池温度
-        self.temp_cold = 1.2            # 冷码池温度
-        self.sum_tolerance = 12         # 和值容差
-        self.require_consecutive = True # 是否需要连号
-        self.max_attempts_layer1 = 500  # 第1层最大尝试次数
-        self.max_attempts_layer2 = 300  # 第2层最大尝试次数
-        
-        # 计算评分和分池
-        self._calculate_scores_and_pools()
+    # ========== 固定使用最近100期数据 ==========
+    if len(draws) > 100:
+        self.draws = draws[-100:]
+    else:
+        self.draws = draws
+    
+    self.red_scores = None
+    self.normal_pool = None
+    self.cold_pool = None
+    
+    # 可调节参数（支持外部修改）
+    self.normal_threshold = 50
+    self.normal_count_layer1 = 5
+    self.cold_count_layer1 = 1
+    self.normal_count_layer2 = 4
+    self.cold_count_layer2 = 2
+    self.temp_normal = 0.8
+    self.temp_cold = 1.2
+    self.sum_tolerance = 12
+    self.require_consecutive = True
+    self.max_attempts_layer1 = 500
+    self.max_attempts_layer2 = 300
+    
+    # ========== 新增：加分项开关（默认全部开启） ==========
+    self.enable_freq_acc = True          # 频率加速度 Δf (+25)
+    self.enable_density_trend = True     # 疏转密 trend (+20)
+    self.enable_absence_bonus = True     # 遗漏13-20期 (+30)
+    self.enable_alternating = True       # 隔期模式 (+12)
+    
+    # 计算评分和分池
+    self._calculate_scores_and_pools()
     
     def _calculate_scores_and_pools(self):
         """计算所有红球的综合评分并分池"""
@@ -3451,41 +3456,40 @@ class Method1NewRule:
         # 分池
         self.normal_pool = [num for num in RED_NUMBERS if self.red_scores[num] >= self.normal_threshold]
         self.cold_pool = [num for num in RED_NUMBERS if self.red_scores[num] < self.normal_threshold]
-    
+    #-----
     def _calculate_total_score(self, num: int) -> int:
-        """
-        计算单号码综合评分
-        公式：基础分 + 加分项（可叠加）
-        """
-        # 计算遗漏期数
-        absence = self._calculate_absence(num)
-        
-        # 基础分
-        base_score = self._get_base_score(absence)
-        
-        # 如果是上期号码，直接返回70分（不再叠加其他加分）
-        if absence == 0:
-            return base_score
-        
-        bonus = 0
-        
-        # 1. 频率加速度 Δf@(20→5) > 0.1
-        if self._calculate_frequency_acceleration(num) > 0.1:
-            bonus += 25
-        
-        # 2. 疏转密（trend > 0.12 且 最近出现≥2次）
-        if self._is_density_turning(num):
-            bonus += 20
-        
-        # 3. 遗漏13-20期加分
-        if 13 <= absence <= 20:
-            bonus += 30
-        
-        # 4. 隔期模式（间隔恰好2期）
-        if self._is_alternating(num):
-            bonus += 12
-        
-        return base_score + bonus
+    """
+    计算单号码综合评分
+    公式：基础分 + 可选加分项（基础分始终开启）
+    """
+    absence = self._calculate_absence(num)
+    
+    # 基础分（始终开启）
+    base_score = self._get_base_score(absence)
+    
+    # 如果是上期号码，直接返回基础分
+    if absence == 0:
+        return base_score
+    
+    bonus = 0
+    
+    # 1. 频率加速度（可开关）
+    if self.enable_freq_acc and self._calculate_frequency_acceleration(num) > 0.1:
+        bonus += 25
+    
+    # 2. 疏转密（可开关）
+    if self.enable_density_trend and self._is_density_turning(num):
+        bonus += 20
+    
+    # 3. 遗漏13-20期（可开关）
+    if self.enable_absence_bonus and 13 <= absence <= 20:
+        bonus += 30
+    
+    # 4. 隔期模式（可开关）
+    if self.enable_alternating and self._is_alternating(num):
+        bonus += 12
+    
+    return base_score + bonus
     
     def _calculate_absence(self, num: int) -> int:
         """计算遗漏期数"""
@@ -4787,7 +4791,6 @@ with col3:
 # 连号要求已移入高级参数面板
 
 # ==================== 高级参数折叠面板（方法1专用） ====================
-# 当选择方法1时显示高级参数
 if "方法1" in ai_model:
     with st.expander("🔧 高级参数设置（方法1专用）", expanded=False):
         st.markdown("**红球参数**")
@@ -4807,6 +4810,18 @@ if "方法1" in ai_model:
             require_consecutive = st.checkbox("要求连号（≥1个）", value=True, key="adv_require_consecutive")
             max_attempts = st.number_input("最大尝试次数", min_value=100, max_value=1000, value=500, step=100, key="adv_max_attempts")
         
+        st.markdown("---")
+        st.markdown("**加分项开关（基础分始终开启）**")
+        
+        col_bonus1, col_bonus2 = st.columns(2)
+        with col_bonus1:
+            enable_freq_acc = st.checkbox("频率加速度 Δf (+25)", value=True, key="enable_freq_acc")
+            enable_density_trend = st.checkbox("疏转密 trend (+20)", value=True, key="enable_density_trend")
+        with col_bonus2:
+            enable_absence_bonus = st.checkbox("遗漏13-20期 (+30)", value=True, key="enable_absence_bonus")
+            enable_alternating = st.checkbox("隔期模式 (+12)", value=True, key="enable_alternating")
+        
+        st.markdown("---")
         st.markdown("**蓝球参数**")
         
         col_adv4, col_adv5, col_adv6 = st.columns(3)
@@ -4833,6 +4848,12 @@ else:
     sum_tolerance = 12
     require_consecutive = True
     max_attempts = 500
+    # 加分项开关默认值
+    enable_freq_acc = True
+    enable_density_trend = True
+    enable_absence_bonus = True
+    enable_alternating = True
+    # 蓝球参数默认值
     blue_temperature = 0.8
     neighbor1_bonus = 20
     neighbor2_bonus = 5
@@ -4882,9 +4903,9 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
             
             # 根据选择的模型调用对应方法
             if "方法1" in ai_model:
-                # 新规则系统
                 generator = Method1NewRule(draws)
-                # 应用高级参数
+                
+                # 应用红球参数
                 generator.normal_threshold = normal_threshold
                 generator.normal_count_layer1 = normal_count
                 generator.cold_count_layer1 = cold_count
@@ -4894,9 +4915,16 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
                 generator.require_consecutive = require_consecutive
                 generator.max_attempts_layer1 = max_attempts
                 generator.max_attempts_layer2 = max_attempts // 2
+                
+                # ========== 应用加分项开关 ==========
+                generator.enable_freq_acc = enable_freq_acc
+                generator.enable_density_trend = enable_density_trend
+                generator.enable_absence_bonus = enable_absence_bonus
+                generator.enable_alternating = enable_alternating
+                
                 bets = generator.generate_bets(num_bets, bet_type_code)
                 
-                # 使用新蓝球系统替换蓝球
+                # 使用新蓝球系统
                 blue_system = BlueScoreSystem(draws)
                 blue_system.temperature = blue_temperature
                 blue_system.neighbor1_bonus = neighbor1_bonus
