@@ -3260,17 +3260,17 @@ class Method4Ensemble:
     """方法4：XGBoost + 规律特征"""
     
     def __init__(self, draws: List[Dict], use_cache: bool = True, sum_method: str = None, blue_method: str = None):
-    # 固定使用最近120期数据
-    if len(draws) > 120:
-        self.draws = draws[-120:]
-    else:
-        self.draws = draws
-    self.use_cache = use_cache
-    self.xgb_model = None
-    self.is_trained = False
-    # 存储预测方法（备用，虽然ML方法不使用）
-    self.sum_method = sum_method
-    self.blue_method = blue_method
+        # 固定使用最近120期数据
+        if len(draws) > 120:
+            self.draws = draws[-120:]
+        else:
+            self.draws = draws
+        self.use_cache = use_cache
+        self.xgb_model = None
+        self.is_trained = False
+        # 存储预测方法（备用，虽然ML方法不使用）
+        self.sum_method = sum_method
+        self.blue_method = blue_method
     
     def _extract_features(self, window_draws: List[Dict], target_num: int) -> Optional[Dict]:
         """提取特征（与原版相同）"""
