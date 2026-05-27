@@ -2698,22 +2698,22 @@ class Method2DanTuo:
         return [num for num, _ in sorted_nums[:n]]
     #-----
     def _get_target_sum(self) -> Tuple[int, int]:
-        """
-        根据用户选择的预测方法返回和值目标（每注独立随机）
-        """
         import streamlit as st
+        import traceback
         
-        # 从 session_state 获取用户选择的预测方法
-        sum_method = st.session_state.get('sum_predict_method', '7期均值')
-        
-        if sum_method == "正弦拟合":
-            # 在正弦拟合预测范围内随机生成和值
-            target = generate_target_sum_by_sine(self.draws)
-        else:
-            # 在7期均值预测范围内随机生成和值
-            target = generate_target_sum_by_range(self.draws)
-        
-        return target, self.sum_tolerance
+        try:
+            sum_method = st.session_state.get('sum_predict_method', '7期均值')
+            
+            if sum_method == "正弦拟合":
+                target = generate_target_sum_by_sine(self.draws)
+            else:
+                target = generate_target_sum_by_range(self.draws)
+            
+            return target, self.sum_tolerance
+        except Exception as e:
+            st.error(f"_get_target_sum 错误: {e}")
+            st.code(traceback.format_exc())
+            return 102, self.sum_tolerance
     
     def _has_consecutive(self, reds: List[int]) -> bool:
         """检查是否有连号"""
