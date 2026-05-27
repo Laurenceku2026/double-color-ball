@@ -2660,23 +2660,26 @@ class Method2DanTuo:
     4. 使用正弦拟合和值筛选
     5. 动态降级策略（5+1 → 4+2 → 保底）
     """
-    
-    def __init__(self, draws: List[Dict]):
+    #-----------------
+    def __init__(self, draws: List[Dict], sum_method: str = None, blue_method: str = None):
         # 固定使用最近100期数据
         if len(draws) > 100:
             self.draws = draws[-100:]
         else:
             self.draws = draws
         
-        # 使用新规则系统的评分计算器
-        self.scorer = Method1NewRule(draws)
+        # 使用新规则系统的评分计算器（传递 sum_method）
+        self.scorer = Method1NewRule(draws, sum_method=sum_method)
         
-        # 可调节参数（支持外部修改）
-        self.normal_threshold = 50          # 正常池阈值（用于参考）
-        self.temp_normal = 0.8              # 正常池温度
-        self.sum_tolerance = 12             # 和值容差
-        self.require_consecutive = True     # 是否需要连号
-        self.max_attempts = 500             # 最大尝试次数
+        # 可调节参数
+        self.normal_threshold = 50
+        self.temp_normal = 0.8
+        self.sum_tolerance = 12
+        self.require_consecutive = True
+        self.max_attempts = 500
+        
+        # 存储蓝球预测方法
+        self.blue_method = blue_method
         
         # 从scorer获取评分和池子
         self.red_scores = self.scorer.red_scores
@@ -2919,7 +2922,7 @@ class Method2DanTuo:
 
 class Method3LightGBM:
     """方法3：LightGBM梯度提升树 + 规律特征"""
-    
+    #------------
     def __init__(self, draws: List[Dict], use_cache: bool = True, sum_method: str = None, blue_method: str = None):
         # 固定使用最近100期数据
         if len(draws) > 100:
@@ -2929,7 +2932,7 @@ class Method3LightGBM:
         self.use_cache = use_cache
         self.model = None
         self.is_trained = False
-        # 存储预测方法（备用，虽然ML方法不使用）
+        # 存储预测方法（备用）
         self.sum_method = sum_method
         self.blue_method = blue_method
     
@@ -3258,7 +3261,7 @@ class Method3LightGBM:
 
 class Method4Ensemble:
     """方法4：XGBoost + 规律特征"""
-    
+    #---------------
     def __init__(self, draws: List[Dict], use_cache: bool = True, sum_method: str = None, blue_method: str = None):
         # 固定使用最近120期数据
         if len(draws) > 120:
@@ -3268,7 +3271,7 @@ class Method4Ensemble:
         self.use_cache = use_cache
         self.xgb_model = None
         self.is_trained = False
-        # 存储预测方法（备用，虽然ML方法不使用）
+        # 存储预测方法（备用）
         self.sum_method = sum_method
         self.blue_method = blue_method
     
@@ -3674,8 +3677,8 @@ class Method1NewRule:
     新规则系统 v15.0
     核心特性：单号码评分 + 分池 + 动态降级 + 正弦拟合和值 + 后置筛选
     """
-    
-    def __init__(self, draws: List[Dict]):
+    #-----------------
+    def __init__(self, draws: List[Dict], sum_method: str = None):
         # ========== 固定使用最近100期数据 ==========
         if len(draws) > 100:
             self.draws = draws[-100:]
@@ -3700,10 +3703,13 @@ class Method1NewRule:
         self.max_attempts_layer2 = 300
     
         # ========== 加分项开关（默认全部开启） ==========
-        self.enable_freq_acc = True          # 频率加速度 Δf (+25)
-        self.enable_density_trend = True     # 疏转密 trend (+20)
-        self.enable_absence_bonus = True     # 遗漏13-20期 (+30)
-        self.enable_alternating = True       # 隔期模式 (+12)
+        self.enable_freq_acc = True
+        self.enable_density_trend = True
+        self.enable_absence_bonus = True
+        self.enable_alternating = True
+        
+        # ========== 存储预测方法 ==========
+        self.sum_method = sum_method
         
         # 计算评分和分池
         self._calculate_scores_and_pools()
@@ -3989,24 +3995,27 @@ class BlueScoreSystem:
     蓝球评分系统
     核心特性：多维评分 + 正弦拟合 + Softmax抽取
     """
-    
-    def __init__(self, draws: List[Dict]):
+    #---------
+    def __init__(self, draws: List[Dict], blue_method: str = None):
         # 固定使用最近100期数据
         if len(draws) > 100:
             self.draws = draws[-100:]
         else:
             self.draws = draws
         
-        # 可调节参数（支持外部修改）
-        self.temperature = 0.8           # Softmax温度
-        self.neighbor1_bonus = 20        # 邻号±1加分
-        self.neighbor2_bonus = 5         # 邻号±2加分
-        self.sine_fit_bonus = 20         # 正弦拟合加分
-        self.freq_acc_bonus = 15         # 频率加速度加分
-        self.mid_absence_bonus = 12      # 遗漏9-13期加分
-        self.alternating_bonus = 5       # 隔期模式加分
-        self.remainder_gap4_bonus = 15   # 除3余数空缺4-5期加分
-        self.remainder_gap6_bonus = 10   # 除3余数空缺6-7期加分
+        # 可调节参数
+        self.temperature = 0.8
+        self.neighbor1_bonus = 20
+        self.neighbor2_bonus = 5
+        self.sine_fit_bonus = 20
+        self.freq_acc_bonus = 15
+        self.mid_absence_bonus = 12
+        self.alternating_bonus = 5
+        self.remainder_gap4_bonus = 15
+        self.remainder_gap6_bonus = 10
+        
+        # 存储蓝球预测方法
+        self.blue_method = blue_method
         
         # 正弦拟合预测值（缓存）
         self._sine_prediction = None
