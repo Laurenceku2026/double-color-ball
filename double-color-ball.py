@@ -3723,12 +3723,14 @@ class Method1NewRule:
         # 分池
         self.normal_pool = [num for num in RED_NUMBERS if self.red_scores[num] >= self.normal_threshold]
         self.cold_pool = [num for num in RED_NUMBERS if self.red_scores[num] < self.normal_threshold]
-    
+    #---
     def _calculate_total_score(self, num: int) -> int:
         """
         计算单号码综合评分
         公式：基础分 + 可选加分项（基础分始终开启）
         """
+        import streamlit as st
+        
         absence = self._calculate_absence(num)
         
         # 基础分（始终开启）
@@ -3740,21 +3742,21 @@ class Method1NewRule:
         
         bonus = 0
         
-        # 1. 频率加速度（可开关）
+        # 1. 频率加速度（可开关，分值可调）
         if self.enable_freq_acc and self._calculate_frequency_acceleration(num) > 0.1:
-            bonus += 25
+            bonus += st.session_state.get('bonus_freq_acc', 25)
         
-        # 2. 疏转密（可开关）
+        # 2. 疏转密（可开关，分值可调）
         if self.enable_density_trend and self._is_density_turning(num):
-            bonus += 20
+            bonus += st.session_state.get('bonus_density_trend', 20)
         
-        # 3. 遗漏13-20期（可开关）
+        # 3. 遗漏13-20期（可开关，分值可调）
         if self.enable_absence_bonus and 13 <= absence <= 20:
-            bonus += 30
+            bonus += st.session_state.get('bonus_absence', 30)
         
-        # 4. 隔期模式（可开关）
+        # 4. 隔期模式（可开关，分值可调）
         if self.enable_alternating and self._is_alternating(num):
-            bonus += 12
+            bonus += st.session_state.get('bonus_alternating', 12)
         
         return base_score + bonus
     
@@ -3766,23 +3768,25 @@ class Method1NewRule:
                 break
             absence += 1
         return absence
-    
+    #----
     def _get_base_score(self, absence: int) -> int:
-        """基础分（基于遗漏值）"""
+        """基础分（基于遗漏值，从用户设置读取）"""
+        import streamlit as st
+        
         if absence == 0:
-            return 70
+            return st.session_state.get('score_0', 70)
         elif 1 <= absence <= 5:
-            return 50
+            return st.session_state.get('score_1_5', 50)
         elif 6 <= absence <= 10:
-            return 20
+            return st.session_state.get('score_6_10', 20)
         elif 11 <= absence <= 15:
-            return 15
+            return st.session_state.get('score_11_15', 15)
         elif 16 <= absence <= 20:
-            return 10
+            return st.session_state.get('score_16_20', 10)
         elif 21 <= absence <= 30:
-            return 8
+            return st.session_state.get('score_21_30', 8)
         else:
-            return 5
+            return st.session_state.get('score_30_plus', 5)
     
     def _calculate_frequency_acceleration(self, num: int) -> float:
         """计算频率加速度 Δf@(20→5)"""
@@ -3822,14 +3826,19 @@ class Method1NewRule:
             return False
         last_gap = positions[-1] - positions[-2]
         return last_gap == 2
-    
-    def _softmax_select(self, pool: List[int], scores: Dict[int, int], temperature: float) -> int:
-        """Softmax概率抽取"""
+    #----------------
+    def _softmax_select(self, pool: List[int], scores: Dict[int, int], temperature: float = None) -> int:
+        """
+        线性概率抽取（概率 = 分数 × 0.0012，自动归一化）
+        temperature 参数保留是为了兼容性，实际不使用
+        """
         if not pool:
             return None
-        score_list = [scores[num] for num in pool]
-        exp_scores = np.exp(np.array(score_list) / temperature)
-        probs = exp_scores / np.sum(exp_scores)
+        score_list = np.array([max(1, scores[num]) for num in pool])
+        # 赋以概率 = 分数 × 0.0012
+        raw_probs = score_list * 0.0012
+        # 归一化
+        probs = raw_probs / np.sum(raw_probs)
         return np.random.choice(pool, p=probs)
     
     def _has_consecutive(self, reds: List[int]) -> bool:
@@ -4641,11 +4650,38 @@ if 'last_training_time' not in st.session_state:
     st.session_state['last_training_time'] = None
 if 'last_bet_type' not in st.session_state:
     st.session_state['last_bet_type'] = "7+1"
-# ========== 新增：预测方法默认值 ==========
+
+# ========== 预测方法默认值 ==========
 if 'sum_predict_method' not in st.session_state:
-    st.session_state['sum_predict_method'] = '7期均值 (±10%)'
+    st.session_state['sum_predict_method'] = '7期均值'
 if 'blue_predict_method' not in st.session_state:
-    st.session_state['blue_predict_method'] = '7期均值 (±3环形)'
+    st.session_state['blue_predict_method'] = '7期均值'
+
+# ========== 基础分自定义默认值（50分 → 赋以概率 6.0%） ==========
+if 'score_0' not in st.session_state:
+    st.session_state['score_0'] = 70
+if 'score_1_5' not in st.session_state:
+    st.session_state['score_1_5'] = 50
+if 'score_6_10' not in st.session_state:
+    st.session_state['score_6_10'] = 20
+if 'score_11_15' not in st.session_state:
+    st.session_state['score_11_15'] = 15
+if 'score_16_20' not in st.session_state:
+    st.session_state['score_16_20'] = 10
+if 'score_21_30' not in st.session_state:
+    st.session_state['score_21_30'] = 8
+if 'score_30_plus' not in st.session_state:
+    st.session_state['score_30_plus'] = 5
+
+# ========== 加分项分值默认值 ==========
+if 'bonus_freq_acc' not in st.session_state:
+    st.session_state['bonus_freq_acc'] = 25
+if 'bonus_density_trend' not in st.session_state:
+    st.session_state['bonus_density_trend'] = 20
+if 'bonus_absence' not in st.session_state:
+    st.session_state['bonus_absence'] = 30
+if 'bonus_alternating' not in st.session_state:
+    st.session_state['bonus_alternating'] = 12
 # ==================== 主页面标题 ====================
 col_title, col_settings = st.columns([0.9, 0.1])
 with col_title:
@@ -5164,15 +5200,53 @@ if "方法1" in ai_model:
             max_attempts = st.number_input("最大尝试次数", min_value=100, max_value=1000, value=500, step=100, key="adv_max_attempts")
         
         st.markdown("---")
+        st.markdown("**🎚️ 基础分自定义（50分 → 赋以概率 6.0%）**")
+        st.caption("调整每个遗漏区间的分数，分数越高被选中概率越大")
+        
+        col_score1, col_score2, col_score3 = st.columns(3)
+        with col_score1:
+            score_0 = st.number_input("0期（上期重号）", value=70, min_value=0, max_value=100, step=5, key="score_0")
+            st.caption(f"→ 赋以概率: {score_0 * 0.12:.1f}%")
+            score_1_5 = st.number_input("1-5期", value=50, min_value=0, max_value=100, step=5, key="score_1_5")
+            st.caption(f"→ 赋以概率: {score_1_5 * 0.12:.1f}%")
+            score_6_10 = st.number_input("6-10期", value=20, min_value=0, max_value=100, step=5, key="score_6_10")
+            st.caption(f"→ 赋以概率: {score_6_10 * 0.12:.1f}%")
+        with col_score2:
+            score_11_15 = st.number_input("11-15期", value=15, min_value=0, max_value=100, step=5, key="score_11_15")
+            st.caption(f"→ 赋以概率: {score_11_15 * 0.12:.1f}%")
+            score_16_20 = st.number_input("16-20期", value=10, min_value=0, max_value=100, step=5, key="score_16_20")
+            st.caption(f"→ 赋以概率: {score_16_20 * 0.12:.1f}%")
+            score_21_30 = st.number_input("21-30期", value=8, min_value=0, max_value=100, step=5, key="score_21_30")
+            st.caption(f"→ 赋以概率: {score_21_30 * 0.12:.1f}%")
+        with col_score3:
+            score_30_plus = st.number_input(">30期", value=5, min_value=0, max_value=100, step=5, key="score_30_plus")
+            st.caption(f"→ 赋以概率: {score_30_plus * 0.12:.1f}%")
+        
+        st.markdown("---")
+        st.markdown("**🎚️ 加分项分值自定义（分数越高，命中该条件的号码权重越大）**")
+        
+        col_bonus_adj1, col_bonus_adj2 = st.columns(2)
+        with col_bonus_adj1:
+            bonus_freq_acc = st.number_input("频率加速度 Δf", value=25, min_value=0, max_value=50, step=5, key="bonus_freq_acc")
+            st.caption(f"→ 赋以概率增加: {bonus_freq_acc * 0.12:.1f}%")
+            bonus_density_trend = st.number_input("疏转密 trend", value=20, min_value=0, max_value=50, step=5, key="bonus_density_trend")
+            st.caption(f"→ 赋以概率增加: {bonus_density_trend * 0.12:.1f}%")
+        with col_bonus_adj2:
+            bonus_absence = st.number_input("遗漏13-20期", value=30, min_value=0, max_value=50, step=5, key="bonus_absence")
+            st.caption(f"→ 赋以概率增加: {bonus_absence * 0.12:.1f}%")
+            bonus_alternating = st.number_input("隔期模式", value=12, min_value=0, max_value=30, step=5, key="bonus_alternating")
+            st.caption(f"→ 赋以概率增加: {bonus_alternating * 0.12:.1f}%")
+        
+        st.markdown("---")
         st.markdown("**加分项开关（基础分始终开启）**")
         
         col_bonus1, col_bonus2 = st.columns(2)
         with col_bonus1:
-            enable_freq_acc = st.checkbox("频率加速度 Δf (+25)", value=True, key="enable_freq_acc")
-            enable_density_trend = st.checkbox("疏转密 trend (+20)", value=True, key="enable_density_trend")
+            enable_freq_acc = st.checkbox("频率加速度 Δf", value=True, key="enable_freq_acc")
+            enable_density_trend = st.checkbox("疏转密 trend", value=True, key="enable_density_trend")
         with col_bonus2:
-            enable_absence_bonus = st.checkbox("遗漏13-20期 (+30)", value=True, key="enable_absence_bonus")
-            enable_alternating = st.checkbox("隔期模式 (+12)", value=True, key="enable_alternating")
+            enable_absence_bonus = st.checkbox("遗漏13-20期", value=True, key="enable_absence_bonus")
+            enable_alternating = st.checkbox("隔期模式", value=True, key="enable_alternating")
         
         st.markdown("---")
         st.markdown("**蓝球参数**")
