@@ -3668,7 +3668,7 @@ class Method1NewRule:
     新规则系统 v15.0
     核心特性：单号码评分 + 分池 + 动态降级 + 正弦拟合和值 + 后置筛选
     """
-    #--------------------
+    
     def __init__(self, draws: List[Dict]):
         # ========== 固定使用最近100期数据 ==========
         if len(draws) > 100:
@@ -3693,7 +3693,7 @@ class Method1NewRule:
         self.max_attempts_layer1 = 500
         self.max_attempts_layer2 = 300
     
-        # ========== 新增：加分项开关（默认全部开启） ==========
+        # ========== 加分项开关（默认全部开启） ==========
         self.enable_freq_acc = True          # 频率加速度 Δf (+25)
         self.enable_density_trend = True     # 疏转密 trend (+20)
         self.enable_absence_bonus = True     # 遗漏13-20期 (+30)
@@ -3711,7 +3711,7 @@ class Method1NewRule:
         # 分池
         self.normal_pool = [num for num in RED_NUMBERS if self.red_scores[num] >= self.normal_threshold]
         self.cold_pool = [num for num in RED_NUMBERS if self.red_scores[num] < self.normal_threshold]
-    #-----
+    
     def _calculate_total_score(self, num: int) -> int:
         """
         计算单号码综合评分
@@ -3790,7 +3790,6 @@ class Method1NewRule:
         if len(self.draws) < 50:
             return False
         
-        # 计算趋势（最近25期 vs 前25期）
         half = 25
         recent = self.draws[-half:]
         earlier = self.draws[-50:-half]
@@ -3800,7 +3799,6 @@ class Method1NewRule:
         
         trend = recent_density - earlier_density
         
-        # 最近出现次数
         recent_count = sum(1 for d in self.draws[-5:] if num in d.get('reds', []))
         
         return trend > 0.12 and recent_count >= 2
@@ -3821,7 +3819,7 @@ class Method1NewRule:
         exp_scores = np.exp(np.array(score_list) / temperature)
         probs = exp_scores / np.sum(exp_scores)
         return np.random.choice(pool, p=probs)
-          
+    
     def _has_consecutive(self, reds: List[int]) -> bool:
         """检查是否有连号"""
         for i in range(1, len(reds)):
@@ -3838,11 +3836,25 @@ class Method1NewRule:
             return False
         return True
     
+    def _get_target_sum(self):
+        """
+        根据用户选择的预测方法返回和值目标（每注独立随机）
+        """
+        import streamlit as st
+        
+        sum_method = st.session_state.get('sum_predict_method', '7期均值')
+        
+        if sum_method == "正弦拟合":
+            target = generate_target_sum_by_sine(self.draws)
+        else:
+            target = generate_target_sum_by_range(self.draws)
+        
+        return target, self.sum_tolerance
+    
     def _sample_reds(self, normal_count: int, cold_count: int) -> List[int]:
         """分层抽取指定数量的红球"""
         selected = []
         
-        # 从正常池抽取
         temp_normal = self.normal_pool.copy()
         for _ in range(min(normal_count, len(temp_normal))):
             if not temp_normal:
@@ -3852,7 +3864,6 @@ class Method1NewRule:
                 selected.append(num)
                 temp_normal.remove(num)
         
-        # 从冷码池抽取
         temp_cold = self.cold_pool.copy()
         for _ in range(min(cold_count, len(temp_cold))):
             if not temp_cold:
@@ -3883,21 +3894,21 @@ class Method1NewRule:
         生成投注（核心方法）
         动态降级策略：5+1 → 4+2 → 保底
         """
-        target_sum, _ = self._get_target_sum()
         bets = []
         
         for _ in range(num_bets):
+            # 每注独立生成和值目标
+            target_sum, _ = self._get_target_sum()
             success = False
             
             # ========== 第1层：5+1 ==========
             for _ in range(self.max_attempts_layer1):
                 selected = self._sample_reds(self.normal_count_layer1, self.cold_count_layer1)
                 if selected and self._is_valid(selected, target_sum):
-                    # 扩展为7+1
                     final_reds = self._expand_to_7(selected)
                     bets.append({
                         'reds': final_reds,
-                        'blues': [8],  # 蓝球暂用默认值，后续由蓝球系统覆盖
+                        'blues': [8],
                         'blue': 8,
                         'sum': sum(final_reds),
                         'method': '新规则系统 v15.0 (5+1)'
@@ -3932,7 +3943,6 @@ class Method1NewRule:
                 continue
             
             # ========== 第3层：放弃和值，只保留连号 ==========
-            self.require_consecutive = True
             for _ in range(self.max_attempts_layer2):
                 selected = self._sample_reds(self.normal_count_layer2, self.cold_count_layer2)
                 if selected and self._has_consecutive(selected):
