@@ -1791,15 +1791,15 @@ def get_target_sum_sine(draws: List[Dict], tolerance: int = 12) -> Tuple[int, in
     target = sine_fit_predict_sum(recent_sums)
     return target, tolerance
 #---------------------
-# ==================== 7期移动平均和值预测 ====================
+# ==================== 7期移动平均和值预测（统一范围 ±12） ====================
 
-def get_target_sum_range(draws: List[Dict], window: int = 7, percentage: float = 0.10) -> Tuple[int, int]:
+def get_target_sum_range(draws: List[Dict], window: int = 7, tolerance: int = 12) -> Tuple[int, int]:
     """
     基于移动平均的红球和值范围预测
     
     参数:
         window: 移动平均窗口期（默认7期）
-        percentage: 范围百分比（默认10%）
+        tolerance: 容差（默认12）
     
     返回:
         (下限, 上限)
@@ -1817,8 +1817,8 @@ def get_target_sum_range(draws: List[Dict], window: int = 7, percentage: float =
         return 80, 125
     
     mean_val = np.mean(recent_sums)
-    lower = max(50, int(mean_val * (1 - percentage)))
-    upper = min(175, int(mean_val * (1 + percentage)))
+    lower = max(50, int(mean_val - tolerance))
+    upper = min(175, int(mean_val + tolerance))
     
     return lower, upper
 
@@ -1829,7 +1829,45 @@ def generate_target_sum_by_range(draws: List[Dict]) -> int:
     return random.randint(lower, upper)
 
 
-# ==================== 7期移动平均蓝球预测（环形） ====================
+# ==================== 正弦拟合和值预测（统一返回范围 ±12） ====================
+
+def get_target_sum_sine_range(draws: List[Dict], tolerance: int = 12) -> Tuple[int, int]:
+    """
+    正弦拟合预测和值范围
+    
+    参数:
+        draws: 历史开奖数据
+        tolerance: 容差（默认12）
+    
+    返回:
+        (下限, 上限)
+    """
+    if len(draws) < 10:
+        return 80, 125
+    
+    recent_sums = []
+    for draw in draws[-10:]:
+        reds = draw.get('reds', [])
+        if reds:
+            recent_sums.append(sum(reds))
+    
+    if len(recent_sums) < 10:
+        return 80, 125
+    
+    target = sine_fit_predict_sum(recent_sums)
+    lower = max(50, target - tolerance)
+    upper = min(175, target + tolerance)
+    
+    return lower, upper
+
+
+def generate_target_sum_by_sine(draws: List[Dict]) -> int:
+    """在正弦拟合预测范围内随机生成一个和值"""
+    lower, upper = get_target_sum_sine_range(draws)
+    return random.randint(lower, upper)
+
+
+# ==================== 7期移动平均蓝球预测（环形 ±3） ====================
 
 def get_blue_range(draws: List[Dict], window: int = 7, radius: int = 3) -> List[int]:
     """
@@ -1860,11 +1898,10 @@ def get_blue_range(draws: List[Dict], window: int = 7, radius: int = 3) -> List[
     candidates = []
     for offset in range(-radius, radius + 1):
         num = center + offset
-        # 环形处理：1-16
         if num < 1:
-            num = 16 + num  # num=-1 → 15, num=0 → 16
+            num = 16 + num
         elif num > 16:
-            num = num - 16  # num=17 → 1, num=18 → 2
+            num = num - 16
         candidates.append(num)
     
     # 去重并保持顺序
@@ -1882,7 +1919,80 @@ def select_blue_by_range(draws: List[Dict]) -> int:
     """从预测范围中随机选择一个蓝球"""
     candidates = get_blue_range(draws)
     return random.choice(candidates)
-# ==================== 蓝球正弦拟合预测 ====================
+
+
+# ==================== 正弦拟合蓝球预测（环形 ±3，共7个候选） ====================
+
+def get_blue_sine_candidates(draws: List[Dict], window: int = 8, radius: int = 3) -> List[int]:
+    """
+    正弦拟合预测蓝球候选池（环形，±3）
+    
+    参数:
+        draws: 历史开奖数据
+        window: 正弦拟合窗口（默认8期）
+        radius: 半径（默认3，共7个号码）
+    
+    返回:
+        候选蓝球列表（环形，7个号码）
+    """
+    if len(draws) < window:
+        return list(range(1, 17))
+    
+    blue_sequence = [d.get('blue', 0) for d in draws[-window:] if d.get('blue', 0) > 0]
+    if len(blue_sequence) < 6:
+        return list(range(1, 17))
+    
+    prediction = sine_fit_predict_blue(blue_sequence)
+    
+    # 环形生成 ±radius 范围内的号码
+    candidates = []
+    for offset in range(-radius, radius + 1):
+        num = prediction + offset
+        if num < 1:
+            num = 16 + num
+        elif num > 16:
+            num = num - 16
+        candidates.append(num)
+    
+    # 去重并保持顺序
+    seen = set()
+    unique_candidates = []
+    for num in candidates:
+        if num not in seen:
+            seen.add(num)
+            unique_candidates.append(num)
+    
+    return unique_candidates
+
+
+def select_blue_by_sine(draws: List[Dict]) -> int:
+    """从正弦拟合候选池中随机选择一个蓝球"""
+    candidates = get_blue_sine_candidates(draws)
+    return random.choice(candidates)
+
+
+# ==================== 统一蓝球选择函数 ====================
+
+def select_blue_by_method(draws: List[Dict], method: str) -> int:
+    """
+    根据指定的方法选择蓝球
+    
+    参数:
+        draws: 历史开奖数据
+        method: "正弦拟合" 或 "7期均值"
+    
+    返回:
+        选中的蓝球号码
+    """
+    if method == "正弦拟合":
+        candidates = get_blue_sine_candidates(draws)
+    else:
+        candidates = get_blue_range(draws)
+    
+    return random.choice(candidates)
+
+
+# ==================== 蓝球正弦拟合预测（保留用于绘图） ====================
 
 def sine_fit_predict_blue(blue_sequence: List[int]) -> int:
     """
@@ -1904,10 +2014,9 @@ def sine_fit_predict_blue(blue_sequence: List[int]) -> int:
     x = np.arange(len(blue_sequence))
     y = np.array(blue_sequence)
     
-    # 初始参数猜测
     A_guess = (np.max(y) - np.min(y)) / 2
     C_guess = np.mean(y)
-    omega_guess = 2 * np.pi / 9  # 周期约9期
+    omega_guess = 2 * np.pi / 9
     
     try:
         params, _ = curve_fit(
@@ -1938,7 +2047,6 @@ def get_blue_sine_prediction(draws: List[Dict], window: int = 8) -> Tuple[int, L
     if len(draws) < window:
         return 8, [], []
     
-    # 获取最近window期蓝球
     recent_blues = []
     recent_periods = []
     for draw in draws[-window:]:
@@ -1950,7 +2058,6 @@ def get_blue_sine_prediction(draws: List[Dict], window: int = 8) -> Tuple[int, L
     if len(recent_blues) < 6:
         return 8, recent_blues, recent_periods
     
-    # 正弦拟合预测
     prediction = sine_fit_predict_blue(recent_blues)
     
     return prediction, recent_blues, recent_periods
@@ -1980,7 +2087,51 @@ def get_blue_series_for_plot(draws: List[Dict], lookback: int = 100) -> Tuple[Li
             period_series.append(str(draw.get('period', '')))
     
     return blue_series, period_series
-# ==================== 动态和值预测（修正版） ====================
+
+
+# ==================== 正弦拟合和值预测（供绘图使用） ====================
+
+def sine_fit_predict_sum(recent_sums: List[int]) -> int:
+    """
+    正弦拟合预测下一期和值（纯函数）
+    
+    参数:
+        recent_sums: 最近10期和值列表
+    返回:
+        预测的和值（80-125范围内）
+    """
+    from scipy.optimize import curve_fit
+    
+    if len(recent_sums) < 10:
+        return int(round(np.mean(recent_sums))) if recent_sums else 102
+    
+    def sine_func(x, A, omega, phi, C):
+        return A * np.sin(omega * x + phi) + C
+    
+    x = np.arange(len(recent_sums))
+    y = np.array(recent_sums)
+    
+    A_guess = (np.max(y) - np.min(y)) / 2
+    C_guess = np.mean(y)
+    omega_guess = 2 * np.pi / 6.5
+    
+    try:
+        params, _ = curve_fit(
+            sine_func, x, y,
+            p0=[A_guess, omega_guess, 0, C_guess],
+            bounds=([0, 2*np.pi/15, -np.pi, 80], 
+                    [50, 2*np.pi/4, np.pi, 125]),
+            maxfev=2000
+        )
+        A, omega, phi, C = params
+        next_val = sine_func(len(recent_sums), A, omega, phi, C)
+        return max(80, min(125, int(round(next_val))))
+    except:
+        return int(round(np.mean(recent_sums)))
+
+
+# ==================== 动态和值预测（保留原函数，以防其他地方调用） ====================
+
 def get_target_sum(draws: List[Dict]) -> Tuple[int, int]:
     """
     动态预测目标和值
@@ -2001,14 +2152,11 @@ def get_target_sum(draws: List[Dict]) -> Tuple[int, int]:
     short_mean = np.mean(recent_sums)
     deviation = short_mean - RED_EXPECTED_SUM
     
-    # 均值回归策略（更温和的调整，阈值从5提高到15）
     if abs(deviation) > 15:
-        # 只回归30%的偏差，避免过度修正
         target = RED_EXPECTED_SUM + int(deviation * 0.3)
     else:
         target = RED_EXPECTED_SUM
     
-    # 确保目标在合理范围内 (79-125 是68%区间)
     target = max(79, min(125, target))
     
     return int(target), RED_SUM_STD
@@ -2550,20 +2698,22 @@ class Method2DanTuo:
         return [num for num, _ in sorted_nums[:n]]
     #-----
     def _get_target_sum(self) -> Tuple[int, int]:
-        """根据用户选择的预测方法返回和值目标"""
+        """
+        根据用户选择的预测方法返回和值目标（每注独立随机）
+        """
         import streamlit as st
         
         # 从 session_state 获取用户选择的预测方法
-        sum_method = st.session_state.get('sum_predict_method', '7期均值 (±10%)')
+        sum_method = st.session_state.get('sum_predict_method', '7期均值')
         
         if sum_method == "正弦拟合":
-            target, _ = get_target_sum_sine(self.draws, self.sum_tolerance)
-            return target, self.sum_tolerance
+            # 在正弦拟合预测范围内随机生成和值
+            target = generate_target_sum_by_sine(self.draws)
         else:
-            # 7期均值范围预测，随机生成和值
-            lower, upper = get_target_sum_range(self.draws)
-            target = random.randint(lower, upper)
-            return target, self.sum_tolerance
+            # 在7期均值预测范围内随机生成和值
+            target = generate_target_sum_by_range(self.draws)
+        
+        return target, self.sum_tolerance
     
     def _has_consecutive(self, reds: List[int]) -> bool:
         """检查是否有连号"""
@@ -2671,16 +2821,19 @@ class Method2DanTuo:
         if len(selected) < 6:
             return None
         return sorted(selected[:6])
-    
+    #-------
     def generate_bets(self, num_bets: int = 4, bet_type: str = "7+1") -> List[Dict]:
         """
         生成投注（核心方法）
         动态降级策略：5+1 → 4+2 → 保底
         """
-        target_sum, _ = self._get_target_sum()
         bets = []
         
         for _ in range(num_bets):
+            # ✅ 每注独立生成和值目标
+            target_sum, _ = self._get_target_sum()
+            
+            # 使用 target_sum 进行筛选
             success = False
             
             # ========== 第1层：5+1（胆拖模式） ==========
@@ -3668,55 +3821,7 @@ class Method1NewRule:
         exp_scores = np.exp(np.array(score_list) / temperature)
         probs = exp_scores / np.sum(exp_scores)
         return np.random.choice(pool, p=probs)
-    
-    def _get_target_sum(self) -> Tuple[int, int]:
-        """正弦拟合预测和值"""
-        if len(self.draws) < 10:
-            return 102, self.sum_tolerance
-        
-        # 获取最近10期和值
-        recent_sums = []
-        for draw in self.draws[-10:]:
-            reds = draw.get('reds', [])
-            if reds:
-                recent_sums.append(sum(reds))
-        
-        if len(recent_sums) < 10:
-            return 102, self.sum_tolerance
-        
-        try:
-            from scipy.optimize import curve_fit
-            
-            def sine_func(x, A, omega, phi, C):
-                return A * np.sin(omega * x + phi) + C
-            
-            x = np.arange(len(recent_sums))
-            y = np.array(recent_sums)
-            
-            A_guess = (np.max(y) - np.min(y)) / 2
-            C_guess = np.mean(y)
-            omega_guess = 2 * np.pi / 6.5
-            
-            params, _ = curve_fit(
-                sine_func, x, y,
-                p0=[A_guess, omega_guess, 0, C_guess],
-                bounds=([0, 2*np.pi/15, -np.pi, 80], 
-                        [50, 2*np.pi/4, np.pi, 125]),
-                maxfev=2000
-            )
-            A, omega, phi, C = params
-            next_val = sine_func(len(recent_sums), A, omega, phi, C)
-            target = max(80, min(125, int(round(next_val))))
-            return target, self.sum_tolerance
-        except:
-            short_mean = np.mean(recent_sums)
-            deviation = short_mean - 102
-            if abs(deviation) > 10:
-                target = 102 + int(deviation * 0.5)
-            else:
-                target = 102
-            return max(80, min(125, target)), self.sum_tolerance
-    
+          
     def _has_consecutive(self, reds: List[int]) -> bool:
         """检查是否有连号"""
         for i in range(1, len(reds)):
@@ -4078,31 +4183,21 @@ class BlueScoreSystem:
     def select_blue(self) -> int:
         """
         选择蓝球
-        根据用户选择的预测方法决定：正弦拟合+评分 或 7期均值环形范围
+        根据用户选择的预测方法决定：从候选池中随机抽取
         """
         import streamlit as st
         
         # 从 session_state 获取用户选择的预测方法
-        blue_method = st.session_state.get('blue_predict_method', '7期均值 (±3环形)')
+        blue_method = st.session_state.get('blue_predict_method', '7期均值')
         
         if blue_method == "正弦拟合":
-            # 原有的正弦拟合 + 评分系统
-            all_blues = list(range(1, 17))
-            scores = {}
-            for num in all_blues:
-                scores[num] = self.calculate_total_score(num)
-            
-            # Softmax概率抽取
-            score_list = [scores[num] for num in all_blues]
-            exp_scores = np.exp(np.array(score_list) / self.temperature)
-            probs = exp_scores / np.sum(exp_scores)
-            
-            selected = np.random.choice(all_blues, p=probs)
-            return int(selected)
+            # 正弦拟合：从 ±3 环形候选池（7个号码）中随机抽取
+            candidates = get_blue_sine_candidates(self.draws, window=8, radius=3)
         else:
-            # 7期均值环形范围预测，随机抽取
+            # 7期均值：从 ±3 环形候选池（7个号码）中随机抽取
             candidates = get_blue_range(self.draws, window=7, radius=3)
-            return random.choice(candidates)
+        
+        return random.choice(candidates)
 
 
 # ============================================================
@@ -4191,8 +4286,8 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
                  seed_mode: str = "date", fixed_seed_value: int = 1,
                  use_ml_signal: bool = False, signal_threshold: int = 50,
                  use_dynamic_bets: bool = True,
-                 sum_predict_method: str = '7期均值 (±10%)',
-                 blue_predict_method: str = '7期均值 (±3环形)') -> Dict:
+                 sum_predict_method: str = '7期均值',
+                 blue_predict_method: str = '7期均值') -> Dict:
     """
     优化版ROI回测 - 支持3种种子模式 + ML信号过滤 + 动态投注 + 预测方法选择
     
@@ -4203,14 +4298,14 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
         use_ml_signal: 是否使用ML信号过滤（True/False）
         signal_threshold: 信号强度阈值（0-100），低于此值不投注
         use_dynamic_bets: 是否根据信号强度动态调整投注组数
-        sum_predict_method: 和值预测方法 ('正弦拟合' 或 '7期均值 (±10%)')
-        blue_predict_method: 蓝球预测方法 ('正弦拟合' 或 '7期均值 (±3环形)')
+        sum_predict_method: 和值预测方法 ('正弦拟合' 或 '7期均值')
+        blue_predict_method: 蓝球预测方法 ('正弦拟合' 或 '7期均值')
     """
     import streamlit as st
     
     # 保存原始 session_state 值
-    original_sum_method = st.session_state.get('sum_predict_method', '7期均值 (±10%)')
-    original_blue_method = st.session_state.get('blue_predict_method', '7期均值 (±3环形)')
+    original_sum_method = st.session_state.get('sum_predict_method', '7期均值')
+    original_blue_method = st.session_state.get('blue_predict_method', '7期均值')
     
     # 临时设置为回测使用的方法
     st.session_state['sum_predict_method'] = sum_predict_method
@@ -4715,10 +4810,9 @@ trend_periods = st.slider(
 
 sum_trend = get_sum_trend(draws, trend_periods)
 
-# 计算两种预测方法的结果
-sine_target, sine_tolerance = get_target_sum_sine(draws)
+# 计算两种预测方法的范围
+sine_lower, sine_upper = get_target_sum_sine_range(draws)
 range_lower, range_upper = get_target_sum_range(draws)
-range_target = (range_lower + range_upper) // 2
 
 # 绘制和值走势图
 fig_sum = go.Figure()
@@ -4751,17 +4845,16 @@ st.plotly_chart(fig_sum, use_container_width=True)
 
 st.markdown("**📊 和值预测参考**")
 
-# 显示两种预测方法的结果
+# 显示两种预测方法的结果（统一显示范围）
 col1, col2, col3, col4, col5 = st.columns(5)
 with col1:
     st.metric("理论均值", f"{RED_EXPECTED_SUM}")
 with col2:
     st.metric("历史均值", f"{sum_trend['mean_sum']:.1f}")
 with col3:
-    st.metric("正弦拟合", f"{sine_target} ± {sine_tolerance}")
+    st.metric("正弦拟合", f"{sine_lower}-{sine_upper}", delta="±12")
 with col4:
-    st.metric("7期均值", f"{range_target} ± {int((range_upper - range_lower)/2)}", 
-              delta=f"范围 {range_lower}-{range_upper}")
+    st.metric("7期均值", f"{range_lower}-{range_upper}", delta="±12")
 with col5:
     current_sum = sum(draws[-1].get('reds', []))
     st.metric("当前和值", f"{current_sum}", delta=f"{current_sum - RED_EXPECTED_SUM:+d}")
@@ -4772,16 +4865,16 @@ col_method1, col_method2 = st.columns(2)
 with col_method1:
     use_sine_sum = st.radio(
         "选择预测方法",
-        options=["正弦拟合", "7期均值 (±10%)"],
+        options=["正弦拟合", "7期均值"],
         index=1,  # 默认7期均值
         key="sum_predict_method",
         horizontal=True
     )
 with col_method2:
     if use_sine_sum == "正弦拟合":
-        st.info(f"当前预测: {sine_target} ± {sine_tolerance}")
+        st.info(f"当前预测范围: {sine_lower}-{sine_upper}")
     else:
-        st.info(f"当前预测: 范围 {range_lower}-{range_upper}")
+        st.info(f"当前预测范围: {range_lower}-{range_upper}")
 
 st.markdown("---")
 #------------------
@@ -4790,10 +4883,10 @@ st.subheader("💙 蓝球走势分析")
 
 # 计算两种预测方法的结果
 blue_sine_prediction, recent_blues, recent_periods = get_blue_sine_prediction(draws, window=8)
+blue_sine_candidates = get_blue_sine_candidates(draws, window=8, radius=3)
 blue_range_candidates = get_blue_range(draws, window=7, radius=3)
-blue_range_center = int(round(np.mean([d.get('blue', 0) for d in draws[-7:] if d.get('blue', 0) > 0]))) if len(draws) >= 7 else 8
 
-st.caption(f"📊 正弦拟合基于最近8期 | 7期均值基于最近7期（环形±3）")
+st.caption(f"📊 正弦拟合基于最近8期 | 7期均值基于最近7期（环形±3，各7个候选）")
 
 # 获取50期蓝球数据
 blue_series_50, period_series_50 = get_blue_series_for_plot(draws, lookback=50)
@@ -4831,7 +4924,7 @@ if len(blue_series_50) >= 10:
                 x=[len(blue_series_50)],
                 y=[blue_sine_prediction],
                 mode='markers',
-                name=f'正弦拟合预测: {blue_sine_prediction:02d}',
+                name=f'正弦拟合预测点: {blue_sine_prediction:02d}',
                 marker=dict(color='red', size=12, symbol='star', line=dict(width=2, color='darkred'))
             ))
         
@@ -4864,10 +4957,11 @@ if len(blue_series_50) >= 10:
         
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("正弦拟合预测", f"{blue_sine_prediction:02d}")
+            sine_candidates_str = ' '.join([f"{c:02d}" for c in blue_sine_candidates])
+            st.metric("正弦拟合候选", f"{len(blue_sine_candidates)}个", delta=sine_candidates_str)
         with col2:
-            range_str = ' '.join([f"{c:02d}" for c in blue_range_candidates[:5]] + ['...'] if len(blue_range_candidates) > 5 else ' '.join([f"{c:02d}" for c in blue_range_candidates]))
-            st.metric("7期均值候选", f"{len(blue_range_candidates)}个号码", delta=range_str[:20])
+            range_candidates_str = ' '.join([f"{c:02d}" for c in blue_range_candidates])
+            st.metric("7期均值候选", f"{len(blue_range_candidates)}个", delta=range_candidates_str)
         with col3:
             last_blue = blue_series_50[-1] if blue_series_50 else 0
             st.metric("上期蓝球", f"{last_blue:02d}")
@@ -4876,16 +4970,16 @@ if len(blue_series_50) >= 10:
         st.markdown("**🎯 蓝球预测方法**")
         use_sine_blue = st.radio(
             "选择预测方法",
-            options=["正弦拟合", "7期均值 (±3环形)"],
+            options=["正弦拟合", "7期均值"],
             index=1,  # 默认7期均值
             key="blue_predict_method",
             horizontal=True
         )
         
         if use_sine_blue == "正弦拟合":
-            st.info(f"当前预测: {blue_sine_prediction:02d}")
+            st.info(f"当前候选池: {blue_sine_candidates}")
         else:
-            st.info(f"当前预测: 候选池 {blue_range_candidates}")
+            st.info(f"当前候选池: {blue_range_candidates}")
     
     except Exception as e:
         st.warning(f"蓝球走势图绘制失败: {e}")
@@ -5312,21 +5406,21 @@ with st.expander("📈 ROI回测分析"):
             key="fixed_seed_value",
             help="建议尝试: 1, 3, 5, 7, 9, 10, 11"
         )
-    
+    #----------------
     # ========== 新增：回测时使用的预测方法选择 ==========
     st.markdown("**🎯 回测时使用的预测方法**")
     col_test1, col_test2 = st.columns(2)
     with col_test1:
         test_sum_method = st.selectbox(
             "和值预测方法",
-            options=["正弦拟合", "7期均值 (±10%)"],
+            options=["正弦拟合", "7期均值"],
             index=1,  # 默认7期均值
             key="test_sum_method"
         )
     with col_test2:
         test_blue_method = st.selectbox(
             "蓝球预测方法",
-            options=["正弦拟合", "7期均值 (±3环形)"],
+            options=["正弦拟合", "7期均值"],
             index=1,  # 默认7期均值
             key="test_blue_method"
         )
