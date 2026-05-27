@@ -4431,9 +4431,8 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
         
         if model_key not in trained_models:
             train_data = draws[i - train_window:i]
-            
+            #---------
             if method_name == "方法1":
-                # 传入预测方法参数，不依赖 session_state
                 generator = Method1NewRule(train_data, sum_method=sum_predict_method)
                 # 应用高级参数（如果存在）
                 generator.normal_threshold = st.session_state.get('adv_normal_threshold', 50)
@@ -4445,6 +4444,13 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
                 generator.require_consecutive = st.session_state.get('adv_require_consecutive', True)
                 generator.max_attempts_layer1 = st.session_state.get('adv_max_attempts', 500)
                 generator.max_attempts_layer2 = st.session_state.get('adv_max_attempts', 500) // 2
+                
+                # ========== 传递加分项开关 ==========
+                generator.enable_freq_acc = st.session_state.get('enable_freq_acc', True)
+                generator.enable_density_trend = st.session_state.get('enable_density_trend', True)
+                generator.enable_absence_bonus = st.session_state.get('enable_absence_bonus', True)
+                generator.enable_alternating = st.session_state.get('enable_alternating', True)
+                
                 bets = generator.generate_bets(current_num_bets, "7+1")
                 
                 # 蓝球系统也传入预测方法参数
@@ -4486,6 +4492,11 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
                     if m_key not in trained_models:
                         if m == "方法1":
                             g = Method1NewRule(train_data, sum_method=sum_predict_method)
+                            # ========== 传递加分项开关 ==========
+                            g.enable_freq_acc = st.session_state.get('enable_freq_acc', True)
+                            g.enable_density_trend = st.session_state.get('enable_density_trend', True)
+                            g.enable_absence_bonus = st.session_state.get('enable_absence_bonus', True)
+                            g.enable_alternating = st.session_state.get('enable_alternating', True)
                             b = g.generate_bets(current_num_bets, "7+1")
                             bs = BlueScoreSystem(train_data, blue_method=blue_predict_method)
                             for bet in b:
