@@ -4825,56 +4825,45 @@ cold_reds_bottom16 = sorted_reds[-16:] # 冷门红球 Bottom 16
 sorted_blues = sorted(blue_scores.items(), key=lambda x: x[1], reverse=True)
 hot_blues_top16 = sorted_blues[:16]    # 篮球热度 Top 16
 
+# 辅助函数：生成居中HTML表格（放在冷热码分析之前，或者直接放在这里）
+def make_centered_table(headers, rows):
+    """生成居中对齐的HTML表格"""
+    html = '<table style="width:100%; text-align:center; border-collapse:collapse;">'
+    # 表头
+    html += '<tr style="background-color:#f0f0f0;">'
+    for h in headers:
+        html += f'<th style="text-align:center; padding:8px;">{h}</th>'
+    html += '<tr>'
+    # 数据行
+    for row in rows:
+        html += '<tr>'
+        for cell in row:
+            html += f'<td style="text-align:center; padding:6px;">{cell}</td>'
+        html += '</tr>'
+    html += '</table>'
+    return html
+
+
 # 并排显示3列
 col1, col2, col3 = st.columns(3)
 
 with col1:
     st.markdown("**🔥 热门红球 Top 16**")
-    hot_reds_df = pd.DataFrame([
-        {'号码': f"{num:02d}", '评分': score}
-        for num, score in hot_reds_top16
-    ])
-    st.dataframe(
-        hot_reds_df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            '号码': st.column_config.TextColumn('号码', width='small'),
-            '评分': st.column_config.NumberColumn('评分', width='small')
-        }
-    )
+    hot_reds_rows = [[f"{num:02d}", score] for num, score in hot_reds_top16]
+    hot_reds_html = make_centered_table(['号码', '评分'], hot_reds_rows)
+    st.markdown(hot_reds_html, unsafe_allow_html=True)
 
 with col2:
     st.markdown("**❄️ 冷门红球 Bottom 16**")
-    cold_reds_df = pd.DataFrame([
-        {'号码': f"{num:02d}", '评分': score}
-        for num, score in cold_reds_bottom16
-    ])
-    st.dataframe(
-        cold_reds_df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            '号码': st.column_config.TextColumn('号码', width='small'),
-            '评分': st.column_config.NumberColumn('评分', width='small')
-        }
-    )
+    cold_reds_rows = [[f"{num:02d}", score] for num, score in cold_reds_bottom16]
+    cold_reds_html = make_centered_table(['号码', '评分'], cold_reds_rows)
+    st.markdown(cold_reds_html, unsafe_allow_html=True)
 
 with col3:
     st.markdown("**💙 篮球热度 Top 16**")
-    hot_blues_df = pd.DataFrame([
-        {'蓝球': f"{num:02d}", '评分': score}
-        for num, score in hot_blues_top16
-    ])
-    st.dataframe(
-        hot_blues_df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            '蓝球': st.column_config.TextColumn('蓝球', width='small'),
-            '评分': st.column_config.NumberColumn('评分', width='small')
-        }
-    )
+    hot_blues_rows = [[f"{num:02d}", score] for num, score in hot_blues_top16]
+    hot_blues_html = make_centered_table(['蓝球', '评分'], hot_blues_rows)
+    st.markdown(hot_blues_html, unsafe_allow_html=True)
 
 st.markdown("---")
 #------------
