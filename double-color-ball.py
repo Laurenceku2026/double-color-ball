@@ -4457,6 +4457,15 @@ def backtest_roi(draws: List[Dict], method_name: str, num_bets: int = 4, lookbac
                 generator.enable_density_trend = st.session_state.get('enable_density_trend', True)
                 generator.enable_absence_bonus = st.session_state.get('enable_absence_bonus', True)
                 generator.enable_alternating = st.session_state.get('enable_alternating', True)
+
+                # ========== 调试输出 ==========
+                print(f"=== 回测 {method_name} 加分项状态 ===")
+                print(f"generator.enable_freq_acc = {generator.enable_freq_acc}")
+                print(f"generator.enable_density_trend = {generator.enable_density_trend}")
+                print(f"generator.enable_absence_bonus = {generator.enable_absence_bonus}")
+                print(f"generator.enable_alternating = {generator.enable_alternating}")
+                print(f"st.session_state enable_freq_acc = {st.session_state.get('enable_freq_acc', 'NOT SET')}")
+                # ================================
                 
                 bets = generator.generate_bets(current_num_bets, "7+1")
                 
@@ -5580,6 +5589,18 @@ with st.expander("📈 ROI回测分析"):
         if backtest_periods <= 0:
             st.error("请选择大于0的回测期数")
         else:
+            # ========== 在这里添加调试代码 ==========
+            st.write("当前加分项开关状态:")
+            st.write(f"enable_freq_acc: {st.session_state.get('enable_freq_acc', 'NOT SET')}")
+            st.write(f"enable_density_trend: {st.session_state.get('enable_density_trend', 'NOT SET')}")
+            st.write(f"enable_absence_bonus: {st.session_state.get('enable_absence_bonus', 'NOT SET')}")
+            st.write(f"enable_alternating: {st.session_state.get('enable_alternating', 'NOT SET')}")
+            st.write(f"加分项分值:")
+            st.write(f"bonus_freq_acc: {st.session_state.get('bonus_freq_acc', 'NOT SET')}")
+            st.write(f"bonus_density_trend: {st.session_state.get('bonus_density_trend', 'NOT SET')}")
+            st.write(f"bonus_absence: {st.session_state.get('bonus_absence', 'NOT SET')}")
+            st.write(f"bonus_alternating: {st.session_state.get('bonus_alternating', 'NOT SET')}")
+            # =====================================
             # 显示当前设置
             if seed_mode == "date":
                 st.info("🔬 种子模式：每期使用自己的开奖日期+21:15")
