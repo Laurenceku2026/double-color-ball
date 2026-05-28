@@ -3741,22 +3741,36 @@ class Method1NewRule:
             return base_score
         
         bonus = 0
-        
-        # 1. 频率加速度（可开关，分值可调）
-        if self.enable_freq_acc and self._calculate_frequency_acceleration(num) > 0.1:
+            
+        # 1. 频率加速度
+        freq_acc = self._calculate_frequency_acceleration(num)
+        if self.enable_freq_acc and freq_acc > 0.1:
             bonus += st.session_state.get('bonus_freq_acc', 25)
+            # 统计触发次数
+            if not hasattr(self, '_freq_acc_count'):
+                self._freq_acc_count = 0
+            self._freq_acc_count += 1
         
-        # 2. 疏转密（可开关，分值可调）
+        # 2. 疏转密
         if self.enable_density_trend and self._is_density_turning(num):
             bonus += st.session_state.get('bonus_density_trend', 20)
+            if not hasattr(self, '_density_count'):
+                self._density_count = 0
+            self._density_count += 1
         
-        # 3. 遗漏13-20期（可开关，分值可调）
+        # 3. 遗漏13-20期
         if self.enable_absence_bonus and 13 <= absence <= 20:
             bonus += st.session_state.get('bonus_absence', 30)
+            if not hasattr(self, '_absence_count'):
+                self._absence_count = 0
+            self._absence_count += 1
         
-        # 4. 隔期模式（可开关，分值可调）
+        # 4. 隔期模式
         if self.enable_alternating and self._is_alternating(num):
             bonus += st.session_state.get('bonus_alternating', 12)
+            if not hasattr(self, '_alt_count'):
+                self._alt_count = 0
+            self._alt_count += 1
         
         return base_score + bonus
     
@@ -3991,7 +4005,12 @@ class Method1NewRule:
                 'sum': sum(final_reds),
                 'method': '新规则系统 v15.0 (保底随机)'
             })
-        
+       # 在返回前打印统计
+        print(f"=== 加分项触发统计 ===")
+        print(f"频率加速度触发次数: {getattr(self, '_freq_acc_count', 0)}")
+        print(f"疏转密触发次数: {getattr(self, '_density_count', 0)}")
+        print(f"遗漏13-20期触发次数: {getattr(self, '_absence_count', 0)}")
+        print(f"隔期模式触发次数: {getattr(self, '_alt_count', 0)}")     
         return bets
 #---------------------------
 # ============================================================
