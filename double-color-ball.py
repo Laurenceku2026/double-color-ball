@@ -5584,17 +5584,6 @@ with st.expander("📈 ROI回测分析"):
         if backtest_periods <= 0:
             st.error("请选择大于0的回测期数")
         else:
-            # ========== 在这里添加调试代码 ==========
-            st.write("当前加分项开关状态:")
-            st.write(f"enable_freq_acc: {st.session_state.get('enable_freq_acc', 'NOT SET')}")
-            st.write(f"enable_density_trend: {st.session_state.get('enable_density_trend', 'NOT SET')}")
-            st.write(f"enable_absence_bonus: {st.session_state.get('enable_absence_bonus', 'NOT SET')}")
-            st.write(f"enable_alternating: {st.session_state.get('enable_alternating', 'NOT SET')}")
-            st.write(f"加分项分值:")
-            st.write(f"bonus_freq_acc: {st.session_state.get('bonus_freq_acc', 'NOT SET')}")
-            st.write(f"bonus_density_trend: {st.session_state.get('bonus_density_trend', 'NOT SET')}")
-            st.write(f"bonus_absence: {st.session_state.get('bonus_absence', 'NOT SET')}")
-            st.write(f"bonus_alternating: {st.session_state.get('bonus_alternating', 'NOT SET')}")
             # =====================================
             # 显示当前设置
             if seed_mode == "date":
