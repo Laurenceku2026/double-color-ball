@@ -3842,24 +3842,24 @@ class Method1NewRule:
         return last_gap == 2
     #----------------
     def _softmax_select(self, pool: List[int], scores: Dict[int, int], temperature: float = None) -> int:
-    """
-    线性概率抽取（概率 = 分数 × 0.0012，自动归一化）
-    temperature 参数保留是为了兼容性，实际不使用
-    """
-    if not pool:
-        return None
-    score_list = np.array([max(1, scores[num]) for num in pool])
-    # 赋以概率 = 分数 × 0.0012
-    raw_probs = score_list * 0.0012
-    # 归一化
-    probs = raw_probs / np.sum(raw_probs)
-    selected = np.random.choice(pool, p=probs)
+        """
+        线性概率抽取（概率 = 分数 × 0.0012，自动归一化）
+        temperature 参数保留是为了兼容性，实际不使用
+        """
+        if not pool:
+            return None
+        score_list = np.array([max(1, scores[num]) for num in pool])
+        # 赋以概率 = 分数 × 0.0012
+        raw_probs = score_list * 0.0012
+        # 归一化
+        probs = raw_probs / np.sum(raw_probs)
+        selected = np.random.choice(pool, p=probs)
     
-    # ========== 调试：打印选中号码及其分数 ==========
-    print(f"[选中] 号码: {selected:02d}, 分数: {scores[selected]}, 池子大小: {len(pool)}")
-    # ============================================
-    
-    return selected
+        # ========== 调试：打印选中号码及其分数 ==========
+        print(f"[选中] 号码: {selected:02d}, 分数: {scores[selected]}, 池子大小: {len(pool)}")
+        # ============================================
+        
+        return selected
     
     def _has_consecutive(self, reds: List[int]) -> bool:
         """检查是否有连号"""
